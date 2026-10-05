@@ -1,4 +1,4 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
@@ -12,7 +12,9 @@ import 'telephony_controller.dart';
 
 class RelayServer {
   static const int port = 8080;
+  static const int udpPort = 8081;
   HttpServer? _server;
+  RawDatagramSocket? _udpSocket;
   final TelephonyController telephonyController;
 
   final List<WebSocketChannel> _connectedSockets = [];
@@ -49,7 +51,7 @@ class RelayServer {
     debugPrint('[ACTIVITY] ${entry.timeFormatted} | $title - $subtitle');
   }
 
-  /// Starts the embedded HTTP & WebSocket server on 0.0.0.0:8080
+  /// Starts the embedded HTTP & WebSocket server on 0.0.0.0:8080 and UDP discovery on 8081
   Future<bool> startServer() async {
     if (_server != null) return true;
 
@@ -66,7 +68,15 @@ class RelayServer {
 
         socket.stream.listen(
           (message) {
-            _handleIncomingSocketMessage(message.toString());
+            final raw = message.toString();
+            try {
+              final msg = RelayMessage.fromJsonString(raw);
+              if (msg.type == 'PING') {
+                socket.sink.add(RelayMessage.pong().toJsonString());
+                return;
+              }
+            } catch (_) {}
+            _handleIncomingSocketMessage(raw);
           },
           onDone: () {
             _connectedSockets.remove(socket);
@@ -83,6 +93,10 @@ class RelayServer {
 
       _server = await shelf_io.serve(cascade.handler, InternetAddress.anyIPv4, port);
       logEvent('Server Started', 'Listening on 0.0.0.0:$port', ActivityType.success);
+
+      _startUdpDiscoveryListener();
+      connectCloudBridge();
+
       return true;
     } catch (e) {
       logEvent('Server Error', 'Failed to bind port $port: $e', ActivityType.error);
@@ -90,8 +104,38 @@ class RelayServer {
     }
   }
 
+  void _startUdpDiscoveryListener() async {
+    try {
+      _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, udpPort);
+      _udpSocket?.broadcastEnabled = true;
+      _udpSocket?.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          final dg = _udpSocket?.receive();
+          if (dg != null) {
+            final msg = String.fromCharCodes(dg.data).trim();
+            if (msg == 'PTA_DISCOVER_REQUEST') {
+              final reply = jsonEncode({
+                'app': 'pta_host',
+                'port': port,
+                'status': 'online',
+              });
+              _udpSocket?.send(reply.codeUnits, dg.address, dg.port);
+              logEvent('Discovery Beacon', 'Replied to auto-discovery request from ${dg.address.address}', ActivityType.info);
+            }
+          }
+        }
+      });
+      debugPrint('[UDP DISCOVERY] Listening on 0.0.0.0:$udpPort');
+    } catch (e) {
+      debugPrint('[UDP DISCOVERY] Port $udpPort notice: $e');
+    }
+  }
+
   /// Stops the server cleanly
   Future<void> stopServer() async {
+    _udpSocket?.close();
+    _udpSocket = null;
+
     for (final s in _connectedSockets) {
       try {
         s.sink.close();
@@ -103,6 +147,12 @@ class RelayServer {
     logEvent('Server Stopped', 'Offline', ActivityType.info);
   }
 
+  WebSocketChannel? _cloudSocket;
+  Timer? _cloudReconnectTimer;
+  bool isCloudConnected = false;
+  String cloudRelayUrl = 'wss://pta-relay.onrender.com/ws';
+  String pairingKey = 'pta_native_default';
+
   /// Broadcasts a RelayMessage event to all connected iPhone clients in <10ms
   void broadcast(RelayMessage msg) {
     final jsonStr = msg.toJsonString();
@@ -113,6 +163,68 @@ class RelayServer {
         _connectedSockets.remove(socket);
       }
     }
+
+    if (isCloudConnected && _cloudSocket != null) {
+      try {
+        _cloudSocket!.sink.add(jsonStr);
+      } catch (_) {}
+    }
+  }
+
+  void connectCloudBridge() {
+    if (isCloudConnected) return;
+
+    try {
+      final uri = Uri.parse(cloudRelayUrl);
+      _cloudSocket = WebSocketChannel.connect(uri);
+      isCloudConnected = true;
+
+      // Register host role
+      _cloudSocket!.sink.add(RelayMessage.registerCloudSession(
+        pairingKey: pairingKey,
+        role: 'host',
+      ).toJsonString());
+
+      logEvent('Cloud Bridge', 'Connected to remote Cloud Relay ($cloudRelayUrl)', ActivityType.success);
+
+      _cloudSocket!.stream.listen(
+        (message) {
+          final raw = message.toString();
+          try {
+            final msg = RelayMessage.fromJsonString(raw);
+            if (msg.type == 'PING') {
+              _cloudSocket?.sink.add(RelayMessage.pong().toJsonString());
+              return;
+            }
+          } catch (_) {}
+          _handleIncomingSocketMessage(raw);
+        },
+        onDone: () {
+          isCloudConnected = false;
+          _cloudSocket = null;
+          logEvent('Cloud Bridge', 'Cloud socket disconnected. Retrying...', ActivityType.info);
+          _scheduleCloudReconnect();
+        },
+        onError: (_) {
+          isCloudConnected = false;
+          _cloudSocket = null;
+          _scheduleCloudReconnect();
+        },
+      );
+    } catch (e) {
+      isCloudConnected = false;
+      _cloudSocket = null;
+      _scheduleCloudReconnect();
+    }
+  }
+
+  void _scheduleCloudReconnect() {
+    _cloudReconnectTimer?.cancel();
+    _cloudReconnectTimer = Timer(const Duration(seconds: 5), () {
+      if (!isCloudConnected && isRunning) {
+        connectCloudBridge();
+      }
+    });
   }
 
   void _handleIncomingSocketMessage(String rawJson) {
@@ -145,7 +257,7 @@ class RelayServer {
     }
   }
 
-  Response _handleRestApi(Request request) {
+  Future<Response> _handleRestApi(Request request) async {
     final path = request.url.path;
 
     // 1. Status
@@ -172,7 +284,16 @@ class RelayServer {
 
     // 4. Dial
     if (path == 'api/call') {
-      final num = request.url.queryParameters['number'] ?? '';
+      String num = request.url.queryParameters['number'] ?? '';
+      if (num.isEmpty) {
+        try {
+          final bodyStr = await request.readAsString();
+          if (bodyStr.isNotEmpty) {
+            final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+            num = json['number']?.toString() ?? '';
+          }
+        } catch (_) {}
+      }
       if (num.isNotEmpty) {
         telephonyController.dialNumber(num);
         logEvent('Dial Triggered', 'Calling $num via REST', ActivityType.call);
@@ -182,7 +303,16 @@ class RelayServer {
 
     // 5. DTMF
     if (path == 'api/dtmf') {
-      final digit = request.url.queryParameters['digit'] ?? '';
+      String digit = request.url.queryParameters['digit'] ?? '';
+      if (digit.isEmpty) {
+        try {
+          final bodyStr = await request.readAsString();
+          if (bodyStr.isNotEmpty) {
+            final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+            digit = json['digit']?.toString() ?? '';
+          }
+        } catch (_) {}
+      }
       if (digit.isNotEmpty) {
         telephonyController.sendDtmf(digit);
       }

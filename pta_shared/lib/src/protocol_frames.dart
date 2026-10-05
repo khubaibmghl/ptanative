@@ -1,4 +1,4 @@
-﻿import 'dart:convert';
+import 'dart:convert';
 
 class DeviceStatusModel {
   final int batteryLevel; // 0 - 100
@@ -127,6 +127,27 @@ class RelayMessage {
     return RelayMessage(
       type: 'ACTION_DTMF',
       data: {'digit': digit},
+    );
+  }
+
+  static RelayMessage ping() {
+    return RelayMessage(type: 'PING', data: {});
+  }
+
+  static RelayMessage pong() {
+    return RelayMessage(type: 'PONG', data: {});
+  }
+
+  static RelayMessage registerCloudSession({
+    required String pairingKey,
+    required String role,
+  }) {
+    return RelayMessage(
+      type: 'REGISTER_CLOUD_SESSION',
+      data: {
+        'pairingKey': pairingKey,
+        'role': role,
+      },
     );
   }
 }

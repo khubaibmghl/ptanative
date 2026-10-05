@@ -1,0 +1,12 @@
+{
+  "name": "pta-cloud-relay",
+  "version": "1.0.0",
+  "description": "PTA Native Cross-Network Cloud Relay Server",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  }
+}

@@ -1,44 +1,91 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 
-/// iPhone 15 Pro Liquid Glass Design System
+/// iPhone 15 Pro / iOS 27 Liquid Glass Design System
 class LiquidGlassTheme {
   // Theme Palette
-  static const Color bgDark = Color(0xFF08080C);
-  static const Color surfaceDark = Color(0xFF121218);
-  static const Color glassFill = Color(0x1FFFFFFF);
-  static const Color glassFillDeep = Color(0x281A1A24);
-  static const Color glassBorder = Color(0x2EFFFFFF);
-  static const Color specularHighlight = Color(0x40FFFFFF);
+  static const Color bgLight = Color(0xFFFFFFFF);
+  static const Color surfaceLight = Color(0xFFF2F2F7);
+  static const Color glassFillLight = Color(0xE8F8F9FB);
+  static const Color glassBorderLight = Color(0x1F000000);
+  static const Color activePillLight = Color(0xFFE5E5EA);
+
+  static const Color bgDark = Color(0xFF0C0B14);
+  static const Color surfaceDark = Color(0xFF1A1828);
+  static const Color glassFillDark = Color(0x28FFFFFF);
+  static const Color glassBorderDark = Color(0x2EFFFFFF);
+  static const Color activePillDark = Color(0x35007AFF);
 
   // Status & Brand Colors
-  static const Color gsmGreen = Color(0xFF30D158);
+  static const Color iosBlue = Color(0xFF007AFF);
+  static const Color accentBlue = Color(0xFF007AFF);
+  static const Color gsmGreen = Color(0xFF34C759);
   static const Color whatsappGreen = Color(0xFF25D366);
-  static const Color crimsonRed = Color(0xFFFF453A);
-  static const Color dynamicPill = Color(0xFF16161E);
-  static const Color accentBlue = Color(0xFF0A84FF);
+  static const Color crimsonRed = Color(0xFFFF3B30);
   static const Color goldOtp = Color(0xFFFFD60A);
+  static const Color dynamicPill = Color(0xFF16161E);
 
-  // Typography Colors
-  static const Color textPrimary = Color(0xFFF5F5F7);
-  static const Color textSecondary = Color(0xFF8E8E93);
-  static const Color textTertiary = Color(0xFF48484A);
+  // Default Typography Colors
+  static const Color textPrimary = Color(0xFF000000);
+  static const Color textSecondary = Color(0xFF6C6C70);
+  static const Color textTertiary = Color(0xFF8E8E93);
+
+  static const Color textPrimaryDark = Color(0xFFF5F5F7);
+  static const Color textSecondaryDark = Color(0xFF8E8E93);
+
+  // Glass default constants
+  static const Color glassFill = Color(0xE8F8F9FB);
+  static const Color glassBorder = Color(0x1F000000);
 
   // Dimensions & Insets
   static const double dynamicIslandTopInset = 54.0;
-  static const double dockHeight = 72.0;
-  static const double glassBlurSigma = 24.0;
+  static const double dockHeight = 64.0;
+  static const double glassBlurSigma = 25.0;
 
-  // ThemeData
-  static ThemeData get themeData {
+  // Active theme brightness toggle state
+  static bool isDarkMode = false;
+
+  static Color get bg => isDarkMode ? bgDark : bgLight;
+  static Color get surface => isDarkMode ? surfaceDark : surfaceLight;
+  static Color get activePill => isDarkMode ? activePillDark : activePillLight;
+
+  static ThemeData get lightThemeData {
+    return ThemeData(
+      brightness: Brightness.light,
+      scaffoldBackgroundColor: bgLight,
+      primaryColor: iosBlue,
+      canvasColor: surfaceLight,
+      fontFamily: '.SF Pro Text',
+      colorScheme: const ColorScheme.light(
+        primary: iosBlue,
+        secondary: gsmGreen,
+        surface: surfaceLight,
+        error: crimsonRed,
+      ),
+      appBarTheme: const AppBarTheme(
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        iconTheme: IconThemeData(color: textPrimary),
+        titleTextStyle: TextStyle(
+          color: textPrimary,
+          fontSize: 18,
+          fontWeight: FontWeight.w600,
+          letterSpacing: -0.4,
+        ),
+      ),
+    );
+  }
+
+  static ThemeData get darkThemeData {
     return ThemeData(
       brightness: Brightness.dark,
       scaffoldBackgroundColor: bgDark,
-      primaryColor: accentBlue,
+      primaryColor: iosBlue,
       canvasColor: surfaceDark,
       fontFamily: '.SF Pro Text',
       colorScheme: const ColorScheme.dark(
-        primary: accentBlue,
+        primary: iosBlue,
         secondary: gsmGreen,
         surface: surfaceDark,
         error: crimsonRed,
@@ -47,15 +94,18 @@ class LiquidGlassTheme {
         backgroundColor: Colors.transparent,
         elevation: 0,
         centerTitle: true,
+        iconTheme: IconThemeData(color: textPrimaryDark),
         titleTextStyle: TextStyle(
-          color: textPrimary,
-          fontSize: 17,
+          color: textPrimaryDark,
+          fontSize: 18,
           fontWeight: FontWeight.w600,
           letterSpacing: -0.4,
         ),
       ),
     );
   }
+
+  static ThemeData get themeData => isDarkMode ? darkThemeData : lightThemeData;
 }
 
 /// Frosted Liquid Glass Card with Specular Border & Backdrop Blur
@@ -102,8 +152,17 @@ class GlassCard extends StatelessWidget {
             border: border ??
                 Border.all(
                   color: LiquidGlassTheme.glassBorder,
-                  width: 0.75,
+                  width: 0.5,
                 ),
+            boxShadow: LiquidGlassTheme.isDarkMode
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.04),
+                      blurRadius: 10,
+                      offset: const Offset(0, 4),
+                    ),
+                  ],
           ),
           child: child,
         ),

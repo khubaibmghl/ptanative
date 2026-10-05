@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'package:http/http.dart' as http;
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
@@ -34,6 +35,8 @@ class RelayClient {
   WebSocketChannel? _channel;
   StreamSubscription? _wsSubscription;
   Timer? _reconnectTimer;
+  Timer? _pingTimer;
+  int _lastPongTime = 0;
   bool _isConnected = false;
 
   bool get isConnected => _isConnected;
@@ -52,21 +55,88 @@ class RelayClient {
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
 
+  String cloudRelayUrl = 'wss://pta-relay.onrender.com/ws';
+  String pairingKey = 'pta_native_default';
+  bool isConnectedViaCloud = false;
+
   Future<void> init() async {
     final prefs = await SharedPreferences.getInstance();
     hostIp = prefs.getString('host_ip') ?? '192.168.23.68';
     hostPort = prefs.getInt('host_port') ?? 8080;
+    cloudRelayUrl = prefs.getString('cloud_url') ?? 'wss://pta-relay.onrender.com/ws';
+    pairingKey = prefs.getString('pairing_key') ?? 'pta_native_default';
+
+    // Try auto-discovering Vivo S1 host on startup
+    final discoveredIp = await discoverHostIp();
+    if (discoveredIp != null && discoveredIp.isNotEmpty) {
+      hostIp = discoveredIp;
+      await prefs.setString('host_ip', hostIp);
+    }
 
     connect();
     _startReconnectLoop();
   }
 
-  Future<void> updateHostConfig(String ip, int port) async {
+  /// UDP Broadcast Auto-Discovery across local subnet and hotspot interfaces
+  Future<String?> discoverHostIp() async {
+    try {
+      final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
+      socket.broadcastEnabled = true;
+      final msg = 'PTA_DISCOVER_REQUEST'.codeUnits;
+
+      // Broadcast to standard broadcast address
+      socket.send(msg, InternetAddress('255.255.255.255'), 8081);
+
+      // Probe active local subnets and common hotspot gateway IPs
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final parts = addr.address.split('.');
+          if (parts.length == 4) {
+            final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+            socket.send(msg, InternetAddress(subnetBroadcast), 8081);
+            final hotspotGateway = '${parts[0]}.${parts[1]}.${parts[2]}.1';
+            socket.send(msg, InternetAddress(hotspotGateway), 8081);
+          }
+        }
+      }
+
+      final completer = Completer<String?>();
+      socket.listen((RawSocketEvent event) {
+        if (event == RawSocketEvent.read) {
+          final dg = socket.receive();
+          if (dg != null) {
+            try {
+              final reply = String.fromCharCodes(dg.data);
+              if (reply.contains('pta_host')) {
+                if (!completer.isCompleted) {
+                  completer.complete(dg.address.address);
+                }
+              }
+            } catch (_) {}
+          }
+        }
+      });
+
+      final discoveredIp = await completer.future.timeout(const Duration(milliseconds: 1200), onTimeout: () => null);
+      socket.close();
+      return discoveredIp;
+    } catch (_) {
+      return null;
+    }
+  }
+
+  Future<void> updateHostConfig(String ip, int port, {String? cloudUrl, String? key}) async {
     hostIp = ip.trim();
     hostPort = port;
+    if (cloudUrl != null) cloudRelayUrl = cloudUrl.trim();
+    if (key != null) pairingKey = key.trim();
+
     final prefs = await SharedPreferences.getInstance();
     await prefs.setString('host_ip', hostIp);
     await prefs.setInt('host_port', hostPort);
+    await prefs.setString('cloud_url', cloudRelayUrl);
+    await prefs.setString('pairing_key', pairingKey);
 
     disconnect();
     connect();
@@ -83,22 +153,51 @@ class RelayClient {
       _wsSubscription = _channel!.stream.listen(
         _onMessageReceived,
         onDone: _onDisconnected,
+        onError: (err) => _connectCloudFallback(),
+        cancelOnError: true,
+      );
+
+      _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+      _startPingHeartbeat();
+    } catch (e) {
+      _connectCloudFallback();
+    }
+  }
+
+  void _connectCloudFallback() {
+    if (_isConnected) return;
+
+    try {
+      final wsUrl = Uri.parse(cloudRelayUrl);
+      _channel = WebSocketChannel.connect(wsUrl);
+
+      _wsSubscription?.cancel();
+      _wsSubscription = _channel!.stream.listen(
+        _onMessageReceived,
+        onDone: _onDisconnected,
         onError: (err) => _onDisconnected(),
         cancelOnError: true,
       );
 
-      _isConnected = true;
-      _connectionController.add(true);
+      _lastPongTime = DateTime.now().millisecondsSinceEpoch;
 
-      // Perform initial delta sync upon connection
-      syncAll();
-    } catch (e) {
+      // Send cloud session registration
+      _channel!.sink.add(RelayMessage.registerCloudSession(
+        pairingKey: pairingKey,
+        role: 'client',
+      ).toJsonString());
+
+      _startPingHeartbeat();
+    } catch (_) {
       _onDisconnected();
     }
   }
 
   void disconnect() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
     _isConnected = false;
+    isConnectedViaCloud = false;
     _wsSubscription?.cancel();
     _wsSubscription = null;
     _channel?.sink.close();
@@ -107,14 +206,43 @@ class RelayClient {
   }
 
   void _onDisconnected() {
+    _pingTimer?.cancel();
+    _pingTimer = null;
     _isConnected = false;
+    isConnectedViaCloud = false;
     _connectionController.add(false);
+  }
+
+  void _startPingHeartbeat() {
+    _pingTimer?.cancel();
+    _pingTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+      if (_isConnected && _channel != null) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        if (now - _lastPongTime > 24000) {
+          // Socket dead timeout
+          disconnect();
+          return;
+        }
+        try {
+          _channel!.sink.add(RelayMessage.ping().toJsonString());
+        } catch (_) {
+          _onDisconnected();
+        }
+      }
+    });
   }
 
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 4), (timer) {
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
       if (!_isConnected) {
+        // Attempt UDP discovery on reconnect if lost
+        final discoveredIp = await discoverHostIp();
+        if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
+          hostIp = discoveredIp;
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('host_ip', hostIp);
+        }
         connect();
       }
     });
@@ -125,7 +253,17 @@ class RelayClient {
       final raw = message.toString();
       final msg = RelayMessage.fromJsonString(raw);
 
+      if (!_isConnected) {
+        _isConnected = true;
+        _connectionController.add(true);
+        syncAll();
+      }
+
       switch (msg.type) {
+        case 'PONG':
+          _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+          break;
+
         case 'INCOMING_RING':
           final number = msg.data['number'] as String? ?? 'Cellular Call';
           final name = msg.data['name'] as String? ?? '';
@@ -206,34 +344,47 @@ class RelayClient {
     } catch (_) {}
   }
 
-  // --- REST API Commands ---
+  // --- Real-time Commands (WebSocket Priority with REST Fallback) ---
 
   Future<bool> dialNumber(String number) async {
-    try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/call');
-      final res = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'number': number}),
-      );
+    final clean = number.trim();
+    if (clean.isEmpty) return false;
 
-      if (res.statusCode == 200) {
-        final contact = await DatabaseHelper.instance.findContactByNumber(number);
-        currentActiveCall = ActiveCallInfo(
-          number: number,
-          callerName: contact?.displayName ?? '',
-          label: contact?.getLabelForNumber(number),
-          startTime: DateTime.now().millisecondsSinceEpoch,
-          isIncoming: false,
-        );
-        _activeCallController.add(currentActiveCall);
+    final contact = await DatabaseHelper.instance.findContactByNumber(clean);
+    currentActiveCall = ActiveCallInfo(
+      number: clean,
+      callerName: contact?.displayName ?? '',
+      label: contact?.getLabelForNumber(clean),
+      startTime: DateTime.now().millisecondsSinceEpoch,
+      isIncoming: false,
+    );
+    _activeCallController.add(currentActiveCall);
+
+    if (_isConnected && _channel != null) {
+      try {
+        _channel!.sink.add(RelayMessage.actionDial(clean).toJsonString());
         return true;
-      }
-    } catch (_) {}
-    return false;
+      } catch (_) {}
+    }
+
+    // REST Fallback
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/call?number=${Uri.encodeComponent(clean)}');
+      final res = await http.post(uri);
+      return res.statusCode == 200;
+    } catch (_) {
+      return false;
+    }
   }
 
   Future<bool> answerCall() async {
+    if (_isConnected && _channel != null) {
+      try {
+        _channel!.sink.add(RelayMessage.actionAnswer().toJsonString());
+        return true;
+      } catch (_) {}
+    }
+
     try {
       final uri = Uri.parse('http://$hostIp:$hostPort/api/answer');
       final res = await http.post(uri);
@@ -244,12 +395,20 @@ class RelayClient {
   }
 
   Future<bool> hangupCall() async {
+    await CallKitService.instance.endAllCalls();
+    currentActiveCall = null;
+    _activeCallController.add(null);
+
+    if (_isConnected && _channel != null) {
+      try {
+        _channel!.sink.add(RelayMessage.actionHangup().toJsonString());
+        return true;
+      } catch (_) {}
+    }
+
     try {
       final uri = Uri.parse('http://$hostIp:$hostPort/api/hangup');
       final res = await http.post(uri);
-      await CallKitService.instance.endAllCalls();
-      currentActiveCall = null;
-      _activeCallController.add(null);
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -257,13 +416,16 @@ class RelayClient {
   }
 
   Future<bool> sendDtmf(String digit) async {
+    if (_isConnected && _channel != null) {
+      try {
+        _channel!.sink.add(RelayMessage.actionDtmf(digit).toJsonString());
+        return true;
+      } catch (_) {}
+    }
+
     try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/dtmf');
-      final res = await http.post(
-        uri,
-        headers: {'Content-Type': 'application/json'},
-        body: jsonEncode({'digit': digit}),
-      );
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/dtmf?digit=${Uri.encodeComponent(digit)}');
+      final res = await http.post(uri);
       return res.statusCode == 200;
     } catch (_) {
       return false;
@@ -301,3 +463,4 @@ class RelayClient {
     } catch (_) {}
   }
 }
+

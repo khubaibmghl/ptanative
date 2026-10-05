@@ -52,12 +52,12 @@ class MainNavigationScreen extends StatefulWidget {
 }
 
 class _MainNavigationScreenState extends State<MainNavigationScreen> {
-  int _currentIndex = 0;
+  int _currentIndex = 2; // Keypad active by default
 
   final List<Widget> _screens = const [
-    KeypadScreen(),
     RecentsScreen(),
     ContactsScreen(),
+    KeypadScreen(),
     MessagesScreen(),
     SettingsScreen(),
   ];
@@ -88,35 +88,39 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return Scaffold(
-      backgroundColor: LiquidGlassTheme.bgDark,
+      backgroundColor: LiquidGlassTheme.bg,
       body: Stack(
         children: [
-          // Background Glows
-          Positioned(
-            top: -120,
-            right: -80,
-            child: Container(
-              width: 320,
-              height: 320,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: LiquidGlassTheme.accentBlue.withValues(alpha: 0.08),
+          // Background subtle ambient radial glow
+          if (isDark) ...[
+            Positioned(
+              top: -120,
+              right: -80,
+              child: Container(
+                width: 320,
+                height: 320,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
+                ),
               ),
             ),
-          ),
-          Positioned(
-            bottom: 60,
-            left: -80,
-            child: Container(
-              width: 300,
-              height: 300,
-              decoration: BoxDecoration(
-                shape: BoxShape.circle,
-                color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.06),
+            Positioned(
+              bottom: 60,
+              left: -80,
+              child: Container(
+                width: 300,
+                height: 300,
+                decoration: BoxDecoration(
+                  shape: BoxShape.circle,
+                  color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.08),
+                ),
               ),
             ),
-          ),
+          ],
 
           SafeArea(
             top: false,
@@ -154,12 +158,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             },
           ),
 
-          // Floating Liquid Glass Dock
+          // Floating iOS 26/27 Liquid Glass Dock Bar & Search Button
           Positioned(
-            left: 20,
-            right: 20,
+            left: 16,
+            right: 16,
             bottom: 24,
-            child: _buildLiquidGlassDock(),
+            child: Row(
+              children: [
+                Expanded(
+                  child: _buildLiquidGlassDock(),
+                ),
+                const SizedBox(width: 10),
+                _buildFloatingSearchButton(),
+              ],
+            ),
           ),
         ],
       ),
@@ -173,6 +185,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       builder: (context, snapshot) {
         final status = snapshot.data;
         final isConnected = RelayClient.instance.isConnected;
+        final isDark = LiquidGlassTheme.isDarkMode;
 
         return Padding(
           padding: const EdgeInsets.only(top: LiquidGlassTheme.dynamicIslandTopInset, left: 20, right: 20, bottom: 8),
@@ -180,9 +193,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             height: 34,
             padding: const EdgeInsets.symmetric(horizontal: 14),
             decoration: BoxDecoration(
-              color: LiquidGlassTheme.dynamicPill,
+              color: isDark ? const Color(0xFF16161E) : const Color(0xFFEBEBF0),
               borderRadius: BorderRadius.circular(17),
-              border: Border.all(color: Colors.white12, width: 0.5),
+              border: Border.all(
+                color: isDark ? Colors.white12 : Colors.black12,
+                width: 0.5,
+              ),
             ),
             child: Row(
               mainAxisAlignment: MainAxisAlignment.spaceBetween,
@@ -193,14 +209,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                       width: 8,
                       height: 8,
                       decoration: BoxDecoration(
-                        color: isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange,
+                        color: isConnected
+                            ? (RelayClient.instance.isConnectedViaCloud ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.gsmGreen)
+                            : Colors.orange,
                         shape: BoxShape.circle,
                       ),
                     ),
                     const SizedBox(width: 8),
                     Text(
-                      isConnected ? 'Vivo S1 • ${RelayClient.instance.hostIp}' : 'Reconnecting...',
-                      style: const TextStyle(
+                      isConnected
+                          ? (RelayClient.instance.isConnectedViaCloud
+                              ? 'Vivo S1 • Remote Cloud'
+                              : 'Vivo S1 • ${RelayClient.instance.hostIp}')
+                          : 'Auto-Discovering...',
+                      style: TextStyle(
                         color: LiquidGlassTheme.textPrimary,
                         fontSize: 12,
                         fontWeight: FontWeight.w500,
@@ -212,7 +234,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                   children: [
                     Text(
                       status != null ? '${status.batteryLevel}%' : '85%',
-                      style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 12),
+                      style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 12),
                     ),
                     const SizedBox(width: 4),
                     Icon(
@@ -221,7 +243,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                       size: 15,
                     ),
                     const SizedBox(width: 8),
-                    const Text(
+                    Text(
                       'Zong 4G',
                       style: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 11),
                     ),
@@ -236,6 +258,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   }
 
   Widget _buildLiquidGlassDock() {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return ClipRRect(
       borderRadius: BorderRadius.circular(32),
       child: BackdropFilter(
@@ -244,24 +268,93 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
           sigmaY: LiquidGlassTheme.glassBlurSigma,
         ),
         child: Container(
-          height: LiquidGlassTheme.dockHeight,
+          height: 64,
+          padding: const EdgeInsets.symmetric(horizontal: 6),
           decoration: BoxDecoration(
-            color: const Color(0x351C1C26),
+            color: isDark ? const Color(0x351C1C26) : const Color(0xEBFAFBFE),
             borderRadius: BorderRadius.circular(32),
             border: Border.all(
-              color: const Color(0x35FFFFFF),
-              width: 0.75,
+              color: isDark ? const Color(0x35FFFFFF) : const Color(0x1F000000),
+              width: 0.5,
             ),
+            boxShadow: isDark
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: 0.08),
+                      blurRadius: 16,
+                      offset: const Offset(0, 6),
+                    ),
+                  ],
           ),
           child: Row(
             mainAxisAlignment: MainAxisAlignment.spaceEvenly,
             children: [
-              _buildDockItem(icon: Icons.dialpad, label: 'Keypad', index: 0),
-              _buildDockItem(icon: Icons.access_time, label: 'Recents', index: 1),
-              _buildDockItem(icon: Icons.contacts, label: 'Contacts', index: 2),
-              _buildDockItem(icon: Icons.mark_email_unread_outlined, label: 'Messages', index: 3),
-              _buildDockItem(icon: Icons.settings, label: 'Settings', index: 4),
+              _buildDockItem(
+                icon: Icons.access_time_filled,
+                label: 'Calls',
+                index: 0,
+                badgeCount: 1,
+              ),
+              _buildDockItem(
+                icon: Icons.person,
+                label: 'Contacts',
+                index: 1,
+              ),
+              _buildDockItem(
+                icon: Icons.grid_view_rounded,
+                label: 'Keypad',
+                index: 2,
+              ),
             ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Widget _buildFloatingSearchButton() {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
+    return GestureDetector(
+      onTap: () {
+        HapticFeedback.lightImpact();
+        setState(() {
+          _currentIndex = 1; // Open Contacts/Search
+        });
+      },
+      child: ClipRRect(
+        borderRadius: BorderRadius.circular(32),
+        child: BackdropFilter(
+          filter: ImageFilter.blur(
+            sigmaX: LiquidGlassTheme.glassBlurSigma,
+            sigmaY: LiquidGlassTheme.glassBlurSigma,
+          ),
+          child: Container(
+            width: 64,
+            height: 64,
+            decoration: BoxDecoration(
+              color: isDark ? const Color(0x351C1C26) : const Color(0xEBFAFBFE),
+              shape: BoxShape.circle,
+              border: Border.all(
+                color: isDark ? const Color(0x35FFFFFF) : const Color(0x1F000000),
+                width: 0.5,
+              ),
+              boxShadow: isDark
+                  ? null
+                  : [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.08),
+                        blurRadius: 16,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+            ),
+            child: Icon(
+              Icons.search,
+              color: isDark ? Colors.white : Colors.black,
+              size: 24,
+            ),
           ),
         ),
       ),
@@ -272,8 +365,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     required IconData icon,
     required String label,
     required int index,
+    int badgeCount = 0,
   }) {
     final isSelected = _currentIndex == index;
+    final isDark = LiquidGlassTheme.isDarkMode;
+
+    final activeColor = LiquidGlassTheme.iosBlue;
+    final inactiveColor = isDark ? const Color(0xFF8E8E93) : const Color(0xFF8E8E93);
 
     return GestureDetector(
       onTap: () {
@@ -283,22 +381,53 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
         });
       },
       behavior: HitTestBehavior.opaque,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 8),
+      child: AnimatedContainer(
+        duration: const Duration(milliseconds: 200),
+        curve: Curves.easeInOut,
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 6),
+        decoration: BoxDecoration(
+          color: isSelected ? (isDark ? const Color(0x28007AFF) : const Color(0xFFE5E5EA)) : Colors.transparent,
+          borderRadius: BorderRadius.circular(22),
+        ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
-            Icon(
-              icon,
-              color: isSelected ? LiquidGlassTheme.accentBlue : LiquidGlassTheme.textSecondary,
-              size: 24,
+            Stack(
+              clipBehavior: Clip.none,
+              children: [
+                Icon(
+                  icon,
+                  color: isSelected ? activeColor : inactiveColor,
+                  size: 22,
+                ),
+                if (badgeCount > 0)
+                  Positioned(
+                    top: -4,
+                    right: -8,
+                    child: Container(
+                      padding: const EdgeInsets.all(4),
+                      decoration: const BoxDecoration(
+                        color: LiquidGlassTheme.crimsonRed,
+                        shape: BoxShape.circle,
+                      ),
+                      child: Text(
+                        '$badgeCount',
+                        style: const TextStyle(
+                          color: Colors.white,
+                          fontSize: 10,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ),
+                  ),
+              ],
             ),
-            const SizedBox(height: 4),
+            const SizedBox(height: 2),
             Text(
               label,
               style: TextStyle(
-                color: isSelected ? LiquidGlassTheme.accentBlue : LiquidGlassTheme.textSecondary,
-                fontSize: 10,
+                color: isSelected ? activeColor : inactiveColor,
+                fontSize: 11,
                 fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
               ),
             ),

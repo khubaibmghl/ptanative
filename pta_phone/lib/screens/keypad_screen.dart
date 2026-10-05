@@ -77,6 +77,8 @@ class _KeypadScreenState extends State<KeypadScreen> {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return Column(
       children: [
         const SizedBox(height: 20),
@@ -86,12 +88,12 @@ class _KeypadScreenState extends State<KeypadScreen> {
               ? Row(
                   mainAxisAlignment: MainAxisAlignment.center,
                   children: [
-                    const Icon(Icons.person, color: LiquidGlassTheme.accentBlue, size: 18),
+                    const Icon(Icons.person, color: LiquidGlassTheme.iosBlue, size: 18),
                     const SizedBox(width: 6),
                     Text(
                       _matchedContact!.displayName,
                       style: const TextStyle(
-                        color: LiquidGlassTheme.accentBlue,
+                        color: LiquidGlassTheme.iosBlue,
                         fontSize: 18,
                         fontWeight: FontWeight.w600,
                       ),
@@ -111,9 +113,9 @@ class _KeypadScreenState extends State<KeypadScreen> {
                   child: Text(
                     _digits.isEmpty ? '' : _digits,
                     textAlign: TextAlign.center,
-                    style: const TextStyle(
+                    style: TextStyle(
                       color: LiquidGlassTheme.textPrimary,
-                      fontSize: 34,
+                      fontSize: 36,
                       fontWeight: FontWeight.w300,
                       letterSpacing: 1.5,
                     ),
@@ -123,9 +125,13 @@ class _KeypadScreenState extends State<KeypadScreen> {
                   GestureDetector(
                     onTap: _onBackspace,
                     onLongPress: _onClearAll,
-                    child: const Padding(
-                      padding: EdgeInsets.only(left: 8),
-                      child: Icon(Icons.backspace_outlined, color: Colors.white60, size: 28),
+                    child: Padding(
+                      padding: const EdgeInsets.only(left: 8),
+                      child: Icon(
+                        Icons.backspace_outlined,
+                        color: isDark ? Colors.white60 : Colors.black54,
+                        size: 26,
+                      ),
                     ),
                   ),
               ],
@@ -134,7 +140,7 @@ class _KeypadScreenState extends State<KeypadScreen> {
         ),
         const Spacer(),
         _buildKeypadGrid(),
-        const SizedBox(height: 24),
+        const SizedBox(height: 20),
         GestureDetector(
           onTap: _initiateGsmDial,
           onLongPress: _openActionPicker,
@@ -142,17 +148,13 @@ class _KeypadScreenState extends State<KeypadScreen> {
             width: 74,
             height: 74,
             decoration: BoxDecoration(
-              gradient: const LinearGradient(
-                colors: [Color(0xFF34C759), Color(0xFF28A745)],
-                begin: Alignment.topLeft,
-                end: Alignment.bottomRight,
-              ),
+              color: LiquidGlassTheme.gsmGreen,
               shape: BoxShape.circle,
               boxShadow: [
                 BoxShadow(
                   color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.35),
-                  blurRadius: 20,
-                  spreadRadius: 2,
+                  blurRadius: 16,
+                  offset: const Offset(0, 6),
                 ),
               ],
             ),
@@ -214,6 +216,8 @@ class _KeypadButton extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return GestureDetector(
       onTap: onTap,
       onLongPress: onLongPress,
@@ -221,29 +225,41 @@ class _KeypadButton extends StatelessWidget {
         width: 76,
         height: 76,
         decoration: BoxDecoration(
-          color: const Color(0x22FFFFFF),
+          color: isDark ? const Color(0x22FFFFFF) : const Color(0xFFF4F4F8),
           shape: BoxShape.circle,
-          border: Border.all(color: const Color(0x28FFFFFF), width: 0.75),
+          border: Border.all(
+            color: isDark ? const Color(0x28FFFFFF) : const Color(0x1F000000),
+            width: 0.5,
+          ),
+          boxShadow: isDark
+              ? null
+              : [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.04),
+                    blurRadius: 8,
+                    offset: const Offset(0, 3),
+                  ),
+                ],
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
           children: [
             Text(
               digit,
-              style: const TextStyle(
+              style: TextStyle(
                 color: LiquidGlassTheme.textPrimary,
-                fontSize: 30,
+                fontSize: 32,
                 fontWeight: FontWeight.w400,
               ),
             ),
             if (letters.isNotEmpty)
               Text(
                 letters,
-                style: const TextStyle(
-                  color: LiquidGlassTheme.textSecondary,
+                style: TextStyle(
+                  color: LiquidGlassTheme.textPrimary,
                   fontSize: 10,
                   letterSpacing: 1.5,
-                  fontWeight: FontWeight.w500,
+                  fontWeight: FontWeight.bold,
                 ),
               ),
           ],

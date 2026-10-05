@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'services/telephony_controller.dart';
 import 'services/relay_server.dart';
 import 'services/telephony_monitor.dart';
@@ -48,7 +48,12 @@ class PtaHostApp extends StatelessWidget {
       theme: ThemeData(
         useMaterial3: true,
         colorSchemeSeed: const Color(0xFF2E7D32), // Forest Green
-        brightness: Brightness.dark,
+        brightness: Brightness.light,
+        scaffoldBackgroundColor: const Color(0xFFF8F9FA),
+        cardTheme: const CardThemeData(
+          color: Colors.white,
+          elevation: 1,
+        ),
       ),
       home: HostMainNavigation(
         server: server,
