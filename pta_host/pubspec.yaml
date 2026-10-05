@@ -18,8 +18,8 @@ dependencies:
   network_info_plus: ^6.0.0
   shared_preferences: ^2.2.3
   url_launcher: ^6.3.0
-  fast_contacts: ^3.0.1
-  call_log: ^4.0.0
+  fast_contacts: ^3.1.4
+  call_log: ^6.0.1
   pta_shared:
     path: ../pta_shared
 
