@@ -12,57 +12,58 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-ios:
-    name: Build iPhone 15 Pro Liquid Glass IPA
-    runs-on: macos-14
-    steps:
-      - name: Checkout Repository
-        uses: actions/checkout@v4
-
-      - name: Setup Java JDK
-        uses: actions/setup-java@v4
-        with:
-          distribution: 'temurin'
-          java-version: '17'
-
-      - name: Setup Flutter SDK
-        uses: subosito/flutter-action@v2
-        with:
-          channel: 'stable'
-          cache: true
-
-      - name: Verify Flutter
-        run: flutter --version
-
-      - name: Install pta_shared Dependencies
-        run: |
-          cd pta_shared
-          flutter pub get
-
-      - name: Install pta_phone Dependencies
-        run: |
-          cd pta_phone
-          flutter pub get
-
-      - name: Build iOS App (Unsigned for SideStore / AltStore)
-        run: |
-          cd pta_phone
-          flutter build ios --release --no-codesign
-
-      - name: Package Payload into .ipa
-        run: |
-          cd pta_phone/build/ios/iphoneos
-          mkdir -p Payload
-          cp -r Runner.app Payload/
-          zip -r -9 PTA_Phone_iOS_LiquidGlass.ipa Payload
-          ls -lh PTA_Phone_iOS_LiquidGlass.ipa
-
-      - name: Upload iOS IPA Artifact
-        uses: actions/upload-artifact@v4
-        with:
-          name: PTA_Phone_iPhone15Pro_LiquidGlass_IPA
-          path: pta_phone/build/ios/iphoneos/PTA_Phone_iOS_LiquidGlass.ipa
-          retention-days: 14
+  # --- iOS Build Job (Temporarily Commented Out as IPA is Already Built) ---
+  # build-ios:
+  #   name: Build iPhone 15 Pro Liquid Glass IPA
+  #   runs-on: macos-14
+  #   steps:
+  #     - name: Checkout Repository
+  #       uses: actions/checkout@v4
+  #
+  #     - name: Setup Java JDK
+  #       uses: actions/setup-java@v4
+  #       with:
+  #         distribution: 'temurin'
+  #         java-version: '17'
+  #
+  #     - name: Setup Flutter SDK
+  #       uses: subosito/flutter-action@v2
+  #       with:
+  #         channel: 'stable'
+  #         cache: true
+  #
+  #     - name: Verify Flutter
+  #       run: flutter --version
+  #
+  #     - name: Install pta_shared Dependencies
+  #       run: |
+  #         cd pta_shared
+  #         flutter pub get
+  #
+  #     - name: Install pta_phone Dependencies
+  #       run: |
+  #         cd pta_phone
+  #         flutter pub get
+  #
+  #     - name: Build iOS App (Unsigned for SideStore / AltStore)
+  #       run: |
+  #         cd pta_phone
+  #         flutter build ios --release --no-codesign
+  #
+  #     - name: Package Payload into .ipa
+  #       run: |
+  #         cd pta_phone/build/ios/iphoneos
+  #         mkdir -p Payload
+  #         cp -r Runner.app Payload/
+  #         zip -r -9 PTA_Phone_iOS_LiquidGlass.ipa Payload
+  #         ls -lh PTA_Phone_iOS_LiquidGlass.ipa
+  #
+  #     - name: Upload iOS IPA Artifact
+  #       uses: actions/upload-artifact@v4
+  #       with:
+  #         name: PTA_Phone_iPhone15Pro_LiquidGlass_IPA
+  #         path: pta_phone/build/ios/iphoneos/PTA_Phone_iOS_LiquidGlass.ipa
+  #         retention-days: 14
 
   build-android:
     name: Build Vivo S1 Host APK
