@@ -9,6 +9,7 @@ import 'package:shelf_web_socket/shelf_web_socket.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/activity_log.dart';
 import 'telephony_controller.dart';
+import 'android_content_service.dart';
 
 class RelayServer {
   static const int port = 8080;
@@ -16,6 +17,7 @@ class RelayServer {
   HttpServer? _server;
   RawDatagramSocket? _udpSocket;
   final TelephonyController telephonyController;
+  AndroidContentService? contentService;
 
   final List<WebSocketChannel> _connectedSockets = [];
   final List<ActivityLog> activityLogs = [];
@@ -332,16 +334,22 @@ class RelayServer {
     }
 
     // 6. History
-    if (path == 'api/history') {
-      final list = cachedCallHistory.map((c) => c.toJson()).toList();
-      return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
+  if (path == 'api/history') {
+    if (cachedCallHistory.isEmpty && contentService != null) {
+      await contentService!.fetchCallHistory();
     }
+    final list = cachedCallHistory.map((c) => c.toJson()).toList();
+    return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
+  }
 
-    // 7. Contacts
-    if (path == 'api/contacts') {
-      final list = cachedContacts.map((c) => c.toJson()).toList();
-      return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
+  // 7. Contacts
+  if (path == 'api/contacts') {
+    if (cachedContacts.isEmpty && contentService != null) {
+      await contentService!.fetchContacts();
     }
+    final list = cachedContacts.map((c) => c.toJson()).toList();
+    return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
+  }
 
     return Response.notFound('Not found');
   }

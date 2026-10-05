@@ -3,6 +3,7 @@ import 'services/telephony_controller.dart';
 import 'services/relay_server.dart';
 import 'services/telephony_monitor.dart';
 import 'services/telemetry_service.dart';
+import 'services/android_content_service.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/live_activity_screen.dart';
 import 'screens/settings_screen.dart';
@@ -14,9 +15,14 @@ void main() async {
   final server = RelayServer(telephonyController: telephonyController);
   final monitor = TelephonyMonitor(server: server);
   final telemetry = TelemetryService(server: server);
+  final contentService = AndroidContentService(server: server);
+  server.contentService = contentService;
 
   // Auto-connect local ADB on startup
   telephonyController.checkAndConnectAdb();
+
+  // Sync native contacts & call history from Vivo S1 ContentResolver
+  contentService.syncAllFromDevice();
 
   runApp(PtaHostApp(
     server: server,

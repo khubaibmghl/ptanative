@@ -1,5 +1,6 @@
-﻿import 'dart:io';
+import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:url_launcher/url_launcher.dart';
 
 class TelephonyController {
   bool isAdbConnected = false;
@@ -65,10 +66,24 @@ class TelephonyController {
     }
   }
 
-  /// Outgoing call dialing
+  /// Outgoing call dialing via Native Intent & ADB Pipeline
   Future<void> dialNumber(String number) async {
     final clean = number.trim();
     if (clean.isEmpty) return;
+
+    // Tier 1: Native Android Telephony Intent via url_launcher
+    try {
+      final uri = Uri.parse('tel:$clean');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+        debugPrint('[TELEPHONY] Dialed $clean via native url_launcher Intent');
+        return;
+      }
+    } catch (e) {
+      debugPrint('[TELEPHONY] Native dial error: $e');
+    }
+
+    // Tier 2: ADB Shell Call Intent
     try {
       if (isAdbConnected) {
         await Process.run('adb', ['-s', adbDeviceId, 'shell', 'am', 'start', '-a', 'android.intent.action.CALL', '-d', 'tel:$clean']);
@@ -76,7 +91,7 @@ class TelephonyController {
         await Process.run('am', ['start', '-a', 'android.intent.action.CALL', '-d', 'tel:$clean']);
       }
     } catch (e) {
-      debugPrint('[TELEPHONY] Dial error: $e');
+      debugPrint('[TELEPHONY] ADB dial error: $e');
     }
   }
 

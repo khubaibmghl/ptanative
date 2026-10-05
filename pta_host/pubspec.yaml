@@ -1,4 +1,4 @@
-﻿name: pta_host
+name: pta_host
 description: "PTA Host Android Companion Server for Vivo S1"
 publish_to: 'none'
 version: 1.0.0+1
@@ -17,6 +17,9 @@ dependencies:
   battery_plus: ^6.0.2
   network_info_plus: ^6.0.0
   shared_preferences: ^2.2.3
+  url_launcher: ^6.3.0
+  fast_contacts: ^3.0.1
+  call_log: ^4.0.0
   pta_shared:
     path: ../pta_shared
 
