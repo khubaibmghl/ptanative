@@ -150,7 +150,8 @@ class RelayServer {
   WebSocketChannel? _cloudSocket;
   Timer? _cloudReconnectTimer;
   bool isCloudConnected = false;
-  String cloudRelayUrl = 'wss://pta-relay.onrender.com/ws';
+  bool enableCloudBridge = false; // Default false to prevent dummy connection spam
+  String cloudRelayUrl = '';
   String pairingKey = 'pta_native_default';
 
   /// Broadcasts a RelayMessage event to all connected iPhone clients in <10ms
@@ -172,6 +173,11 @@ class RelayServer {
   }
 
   void connectCloudBridge() {
+    if (!enableCloudBridge || cloudRelayUrl.trim().isEmpty || cloudRelayUrl.contains('yourdomain') || cloudRelayUrl.contains('onrender.com')) {
+      logEvent('Cloud Bridge', 'Cloud bridge inactive (Local Wi-Fi / Hotspot Direct Mode)', ActivityType.info);
+      return;
+    }
+
     if (isCloudConnected) return;
 
     try {
@@ -202,26 +208,32 @@ class RelayServer {
         onDone: () {
           isCloudConnected = false;
           _cloudSocket = null;
-          logEvent('Cloud Bridge', 'Cloud socket disconnected. Retrying...', ActivityType.info);
-          _scheduleCloudReconnect();
+          if (enableCloudBridge) {
+            logEvent('Cloud Bridge', 'Cloud socket disconnected. Retrying in 10s...', ActivityType.info);
+            _scheduleCloudReconnect();
+          }
         },
         onError: (_) {
           isCloudConnected = false;
           _cloudSocket = null;
-          _scheduleCloudReconnect();
+          if (enableCloudBridge) {
+            _scheduleCloudReconnect();
+          }
         },
       );
     } catch (e) {
       isCloudConnected = false;
       _cloudSocket = null;
-      _scheduleCloudReconnect();
+      if (enableCloudBridge) {
+        _scheduleCloudReconnect();
+      }
     }
   }
 
   void _scheduleCloudReconnect() {
     _cloudReconnectTimer?.cancel();
-    _cloudReconnectTimer = Timer(const Duration(seconds: 5), () {
-      if (!isCloudConnected && isRunning) {
+    _cloudReconnectTimer = Timer(const Duration(seconds: 10), () {
+      if (!isCloudConnected && isRunning && enableCloudBridge) {
         connectCloudBridge();
       }
     });

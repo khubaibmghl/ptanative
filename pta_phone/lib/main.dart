@@ -10,7 +10,6 @@ import 'widgets/active_call_bar.dart';
 import 'screens/keypad_screen.dart';
 import 'screens/recents_screen.dart';
 import 'screens/contacts_screen.dart';
-import 'screens/messages_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/dtmf_sheet.dart';
 
@@ -58,7 +57,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     RecentsScreen(),
     ContactsScreen(),
     KeypadScreen(),
-    MessagesScreen(),
     SettingsScreen(),
   ];
 
@@ -305,6 +303,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 icon: Icons.grid_view_rounded,
                 label: 'Keypad',
                 index: 2,
+              ),
+              _buildDockItem(
+                icon: Icons.settings,
+                label: 'Settings',
+                index: 3,
               ),
             ],
           ),

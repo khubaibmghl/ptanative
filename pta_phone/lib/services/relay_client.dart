@@ -55,7 +55,7 @@ class RelayClient {
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
 
-  String cloudRelayUrl = 'wss://pta-relay.onrender.com/ws';
+  String cloudRelayUrl = '';
   String pairingKey = 'pta_native_default';
   bool isConnectedViaCloud = false;
 
@@ -63,7 +63,7 @@ class RelayClient {
     final prefs = await SharedPreferences.getInstance();
     hostIp = prefs.getString('host_ip') ?? '192.168.23.68';
     hostPort = prefs.getInt('host_port') ?? 8080;
-    cloudRelayUrl = prefs.getString('cloud_url') ?? 'wss://pta-relay.onrender.com/ws';
+    cloudRelayUrl = prefs.getString('cloud_url') ?? '';
     pairingKey = prefs.getString('pairing_key') ?? 'pta_native_default';
 
     // Try auto-discovering Vivo S1 host on startup
@@ -142,6 +142,11 @@ class RelayClient {
     connect();
   }
 
+  bool _shouldUseCloudFallback() {
+    final url = cloudRelayUrl.trim();
+    return url.isNotEmpty && !url.contains('onrender.com') && !url.contains('yourdomain');
+  }
+
   void connect() {
     if (_isConnected) return;
 
@@ -153,14 +158,24 @@ class RelayClient {
       _wsSubscription = _channel!.stream.listen(
         _onMessageReceived,
         onDone: _onDisconnected,
-        onError: (err) => _connectCloudFallback(),
+        onError: (err) {
+          if (_shouldUseCloudFallback()) {
+            _connectCloudFallback();
+          } else {
+            _onDisconnected();
+          }
+        },
         cancelOnError: true,
       );
 
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
       _startPingHeartbeat();
     } catch (e) {
-      _connectCloudFallback();
+      if (_shouldUseCloudFallback()) {
+        _connectCloudFallback();
+      } else {
+        _onDisconnected();
+      }
     }
   }
 
