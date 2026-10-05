@@ -109,10 +109,10 @@ packages:
     dependency: "direct main"
     description:
       name: fast_contacts
-      sha256: "2b14f329fac87f5a44ccd8dfe2c440ea57365bea5389c572b942637e1d764dbd"
+      sha256: c0713a2917b17a5348a8bf445fbe9146c299de901fe66679c35c6ba4028815e3
       url: "https://pub.dev"
     source: hosted
-    version: "3.1.4"
+    version: "6.0.0"
   ffi:
     dependency: transitive
     description:
