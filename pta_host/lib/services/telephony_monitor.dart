@@ -72,7 +72,17 @@ class TelephonyMonitor {
           label: resolvedLabel,
         ));
       }
-    } else if (state == 'OFFHOOK') {
+    } else if (state == 'ACTIVE') {
+      if (_lastPhase != 'ACTIVE') {
+        _lastPhase = 'ACTIVE';
+        _talkStartTime = now;
+        server.logEvent('Call Answered & Connected', 'Recipient picked up call. Timer running.', ActivityType.call);
+        server.broadcast(RelayMessage.callActive(
+          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
+          startTime: _talkStartTime,
+        ));
+      }
+    } else if (state == 'OFFHOOK' || state == 'DIALING') {
       if (_lastPhase != 'ACTIVE' && _lastPhase != 'DIALING') {
         _lastPhase = 'DIALING';
         _talkStartTime = 0;

@@ -62,6 +62,16 @@ class RelayClient {
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
   final voiceTunnel = VoiceTunnelService();
+  final List<String> diagnosticLogs = [];
+
+  void logDiagnostic(String text) {
+    final now = DateTime.now();
+    final timeStr = '${now.hour.toString().padLeft(2, '0')}:${now.minute.toString().padLeft(2, '0')}:${now.second.toString().padLeft(2, '0')}.${now.millisecond.toString().padLeft(3, '0')}';
+    final entry = '[$timeStr] $text';
+    diagnosticLogs.insert(0, entry);
+    if (diagnosticLogs.length > 150) diagnosticLogs.removeLast();
+    debugPrint('[DIAGNOSTIC] $entry');
+  }
 
   String cloudRelayUrl = '';
   String pairingKey = 'pta_native_default';
@@ -178,6 +188,7 @@ class RelayClient {
 
     try {
       final wsUrl = Uri.parse('ws://$hostIp:$hostPort/ws');
+      logDiagnostic('Connecting to WebSocket: $wsUrl');
       _channel = WebSocketChannel.connect(wsUrl);
 
       _wsSubscription?.cancel();
@@ -185,6 +196,7 @@ class RelayClient {
         _onMessageReceived,
         onDone: _onDisconnected,
         onError: (err) {
+          logDiagnostic('Socket Error: $err');
           if (_shouldUseCloudFallback()) {
             _connectCloudFallback();
           } else {
@@ -197,6 +209,7 @@ class RelayClient {
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
       _startPingHeartbeat();
     } catch (e) {
+      logDiagnostic('Connect Exception: $e');
       if (_shouldUseCloudFallback()) {
         _connectCloudFallback();
       } else {
@@ -210,13 +223,17 @@ class RelayClient {
 
     try {
       final wsUrl = Uri.parse(cloudRelayUrl);
+      logDiagnostic('Connecting to Cloud Fallback: $wsUrl');
       _channel = WebSocketChannel.connect(wsUrl);
 
       _wsSubscription?.cancel();
       _wsSubscription = _channel!.stream.listen(
         _onMessageReceived,
         onDone: _onDisconnected,
-        onError: (err) => _onDisconnected(),
+        onError: (err) {
+          logDiagnostic('Cloud Socket Error: $err');
+          _onDisconnected();
+        },
         cancelOnError: true,
       );
 
@@ -229,12 +246,14 @@ class RelayClient {
       ).toJsonString());
 
       _startPingHeartbeat();
-    } catch (_) {
+    } catch (e) {
+      logDiagnostic('Cloud Connect Exception: $e');
       _onDisconnected();
     }
   }
 
   void disconnect() {
+    logDiagnostic('Disconnect requested explicitly');
     _pingTimer?.cancel();
     _pingTimer = null;
     _isConnected = false;
@@ -247,6 +266,7 @@ class RelayClient {
   }
 
   void _onDisconnected() {
+    logDiagnostic('Socket Disconnected (onDone/onError fired)');
     _pingTimer?.cancel();
     _pingTimer = null;
     _isConnected = false;
@@ -260,13 +280,14 @@ class RelayClient {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         if (now - _lastPongTime > 24000) {
-          // Socket dead timeout
+          logDiagnostic('Ping timeout (>24s no pong). Disconnecting.');
           disconnect();
           return;
         }
         try {
           _channel!.sink.add(RelayMessage.ping().toJsonString());
-        } catch (_) {
+        } catch (e) {
+          logDiagnostic('Ping Send Error: $e');
           _onDisconnected();
         }
       }
@@ -275,7 +296,7 @@ class RelayClient {
 
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 4), (timer) async {
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       if (!_isConnected) {
         // Attempt UDP discovery on reconnect if lost
         final discoveredIp = await discoverHostIp();
@@ -296,8 +317,13 @@ class RelayClient {
 
       if (!_isConnected) {
         _isConnected = true;
+        logDiagnostic('Socket Connected Successfully!');
         _connectionController.add(true);
         syncAll();
+      }
+
+      if (msg.type != 'PONG') {
+        logDiagnostic('RX [${msg.type}]: $raw');
       }
 
       switch (msg.type) {

@@ -89,18 +89,35 @@ class MainActivity : FlutterActivity() {
         phoneStateReceiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context?, intent: Intent?) {
                 if (intent == null) return
-                if (intent.action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
+                val action = intent.action
+                val payload = HashMap<String, Any>()
+
+                if (action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
                     val stateStr = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
                     val incomingNumber = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: ""
-
-                    val payload = HashMap<String, Any>()
                     payload["state"] = stateStr ?: "IDLE"
                     payload["incomingNumber"] = incomingNumber
                     eventSink?.success(payload)
+                } else if (action == "android.intent.action.PRECISE_CALL_STATE_CHANGED") {
+                    val fgState = intent.getIntExtra("foreground_state", -1)
+                    val stateStr = when (fgState) {
+                        1 -> "ACTIVE"      // Call Answered & Connected!
+                        3, 4 -> "DIALING"  // Dialing out / Ringing on remote end
+                        0 -> "IDLE"        // Call ended
+                        else -> null
+                    }
+                    if (stateStr != null) {
+                        payload["state"] = stateStr
+                        payload["incomingNumber"] = ""
+                        eventSink?.success(payload)
+                    }
                 }
             }
         }
-        val filter = IntentFilter(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+        val filter = IntentFilter().apply {
+            addAction(TelephonyManager.ACTION_PHONE_STATE_CHANGED)
+            addAction("android.intent.action.PRECISE_CALL_STATE_CHANGED")
+        }
         registerReceiver(phoneStateReceiver, filter)
     }
 

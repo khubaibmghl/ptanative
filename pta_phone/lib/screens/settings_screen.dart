@@ -3,6 +3,7 @@ import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../services/relay_client.dart';
 import '../theme/liquid_glass_theme.dart';
+import '../widgets/diagnostic_console_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   const SettingsScreen({super.key});
@@ -280,6 +281,17 @@ class _SettingsScreenState extends State<SettingsScreen> {
                       iconColor: Colors.purpleAccent,
                       title: 'Hardware ADB Loopback',
                       value: status != null && status.isAdbConnected ? 'Active (:5555)' : 'Ready',
+                    ),
+                    Divider(color: isDark ? Colors.white10 : Colors.black12, height: 1),
+                    ListTile(
+                      leading: const Icon(Icons.bug_report_rounded, color: Colors.orangeAccent),
+                      title: const Text('Live Telemetry Debugger', style: TextStyle(fontWeight: FontWeight.bold)),
+                      subtitle: const Text('Inspect raw WebSocket frames, pings & socket disconnects'),
+                      trailing: const Icon(Icons.chevron_right),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        DiagnosticConsoleSheet.show(context);
+                      },
                     ),
                   ],
                 ),
