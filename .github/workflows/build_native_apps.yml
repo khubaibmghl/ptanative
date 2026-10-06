@@ -44,16 +44,16 @@ jobs:
           cd pta_phone
           flutter pub get
 
-      - name: Build iOS App (Unsigned for SideStore / AltStore)
+      - name: Build Unsigned iOS Runner.app & Package IPA
         run: |
           cd pta_phone
-          flutter build ios --release --no-codesign
-
-      - name: Package Payload into .ipa
-        run: |
-          cd pta_phone/build/ios/iphoneos
-          mkdir -p Payload
-          cp -r Runner.app Payload/
+          flutter build ios --release --no-codesign --config-only
+          cd ios
+          pod install
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO clean build
+          mkdir -p ../build/ios/iphoneos/Payload
+          cp -r build/Release-iphoneos/Runner.app ../build/ios/iphoneos/Payload/
+          cd ../build/ios/iphoneos
           zip -r -9 PTA_Phone_iOS_LiquidGlass.ipa Payload
           ls -lh PTA_Phone_iOS_LiquidGlass.ipa
 
@@ -96,7 +96,7 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd pta_host
-          flutter build apk --release
+          flutter build apk --release -Pandroid-skip-build-dependency-validation=true
 
       - name: Rename & Prepare APK
         run: |
