@@ -304,6 +304,54 @@ class RelayClient {
           _lastPongTime = DateTime.now().millisecondsSinceEpoch;
           break;
 
+        case 'SYNC_STATE':
+          try {
+            final status = msg.data['status'] as String? ?? '';
+            final isInCall = msg.data['is_in_call'] as bool? ?? false;
+            final isConnected = msg.data['is_connected'] as bool? ?? false;
+            final number = msg.data['number'] as String? ?? '';
+
+            if (isInCall) {
+              if (status == 'Incoming Call') {
+                currentActiveCall = ActiveCallInfo(
+                  number: number.isNotEmpty ? number : 'Cellular Call',
+                  callerName: '',
+                  startTime: 0,
+                  isIncoming: true,
+                  state: PhoneCallState.ringing,
+                );
+                _activeCallController.add(currentActiveCall);
+                try {
+                  await CallKitService.instance.showIncomingCall(
+                    callId: CallKitService.generateUuid(),
+                    callerName: number,
+                    handle: number,
+                  );
+                } catch (_) {}
+              } else if (isConnected) {
+                final dur = msg.data['duration_seconds'] as int? ?? 0;
+                final startMs = DateTime.now().millisecondsSinceEpoch - (dur * 1000);
+                currentActiveCall = ActiveCallInfo(
+                  number: number.isNotEmpty ? number : 'Cellular Call',
+                  callerName: '',
+                  startTime: startMs,
+                  isIncoming: false,
+                  state: PhoneCallState.connected,
+                );
+                _activeCallController.add(currentActiveCall);
+              }
+            } else {
+              if (currentActiveCall != null) {
+                currentActiveCall = null;
+                _activeCallController.add(null);
+                await CallKitService.instance.endAllCalls();
+              }
+            }
+          } catch (e) {
+            debugPrint('[RELAY] Exception processing SYNC_STATE: $e');
+          }
+          break;
+
         case 'INCOMING_RING':
           final number = msg.data['number'] as String? ?? 'Cellular Call';
           final name = msg.data['name'] as String? ?? '';

@@ -73,13 +73,12 @@ class TelephonyMonitor {
         ));
       }
     } else if (state == 'OFFHOOK') {
-      if (_lastPhase != 'ACTIVE') {
-        _lastPhase = 'ACTIVE';
-        _talkStartTime = now;
-        server.logEvent('Call Connected', 'Audio via Bluetooth/Earpiece.', ActivityType.call);
-        server.broadcast(RelayMessage.callActive(
+      if (_lastPhase != 'ACTIVE' && _lastPhase != 'DIALING') {
+        _lastPhase = 'DIALING';
+        _talkStartTime = 0;
+        server.logEvent('Dialing Outgoing', _activeNumber, ActivityType.call);
+        server.broadcast(RelayMessage.callDialing(
           number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
-          startTime: _talkStartTime,
         ));
       }
     } else if (state == 'IDLE') {

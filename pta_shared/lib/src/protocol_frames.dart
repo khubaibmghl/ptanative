@@ -82,6 +82,17 @@ class RelayMessage {
     );
   }
 
+  static RelayMessage callDialing({
+    required String number,
+  }) {
+    return RelayMessage(
+      type: 'CALL_DIALING',
+      data: {
+        'number': number,
+      },
+    );
+  }
+
   static RelayMessage callActive({
     required String number,
     required int startTime,
