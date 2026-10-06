@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -16,6 +17,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
   Map<String, List<ContactModel>> _groupedContacts = {};
   List<String> _alphabetKeys = [];
   bool _isLoading = true;
+  StreamSubscription? _syncSub;
   final ScrollController _scrollController = ScrollController();
 
   final List<String> _fullAlphabet = const [
@@ -27,6 +29,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
   void initState() {
     super.initState();
     _loadContacts();
+    _syncSub = RelayClient.instance.syncStream.listen((_) {
+      _loadContacts();
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    _scrollController.dispose();
+    super.dispose();
   }
 
   Future<void> _loadContacts() async {

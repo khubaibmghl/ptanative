@@ -51,11 +51,13 @@ class RelayClient {
   final _statusController = StreamController<DeviceStatusModel>.broadcast();
   final _activeCallController = StreamController<ActiveCallInfo?>.broadcast();
   final _smsController = StreamController<SmsMessageModel>.broadcast();
+  final _syncController = StreamController<void>.broadcast();
 
   Stream<bool> get connectionStream => _connectionController.stream;
   Stream<DeviceStatusModel> get statusStream => _statusController.stream;
   Stream<ActiveCallInfo?> get activeCallStream => _activeCallController.stream;
   Stream<SmsMessageModel> get smsStream => _smsController.stream;
+  Stream<void> get syncStream => _syncController.stream;
 
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
@@ -330,10 +332,27 @@ class RelayClient {
           _activeCallController.add(currentActiveCall);
           break;
 
+        case 'CALL_DIALING':
+          final dialNum = msg.data['number'] as String? ?? '';
+          final dialContact = await DatabaseHelper.instance.findContactByNumber(dialNum);
+          currentActiveCall = ActiveCallInfo(
+            number: dialNum.isNotEmpty ? dialNum : (currentActiveCall?.number ?? 'Cellular Call'),
+            callerName: dialContact?.displayName ?? (currentActiveCall?.callerName ?? ''),
+            label: dialContact?.getLabelForNumber(dialNum) ?? currentActiveCall?.label,
+            startTime: 0,
+            isIncoming: false,
+            state: PhoneCallState.dialing,
+          );
+          _activeCallController.add(currentActiveCall);
+          break;
+
         case 'CALL_ACTIVE':
           final number = msg.data['number'] as String? ?? '';
-          final startTimeRaw = msg.data['startTime'] as int? ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
-          final startTimeMs = startTimeRaw < 100000000000 ? startTimeRaw * 1000 : startTimeRaw;
+          final isAnswered = msg.data['isAnswered'] as bool? ?? (msg.data['startTime'] != null && (msg.data['startTime'] as int) > 0);
+          final startTimeRaw = msg.data['startTime'] as int? ?? 0;
+          final startTimeMs = (isAnswered && startTimeRaw > 0)
+              ? (startTimeRaw < 100000000000 ? startTimeRaw * 1000 : startTimeRaw)
+              : 0;
 
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           currentActiveCall = ActiveCallInfo(
@@ -342,7 +361,7 @@ class RelayClient {
             label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
             startTime: startTimeMs,
             isIncoming: currentActiveCall?.isIncoming ?? false,
-            state: PhoneCallState.connected,
+            state: isAnswered && startTimeMs > 0 ? PhoneCallState.connected : PhoneCallState.dialing,
           );
           _activeCallController.add(currentActiveCall);
           break;
@@ -369,9 +388,34 @@ class RelayClient {
             timestamp: DateTime.now().millisecondsSinceEpoch,
           );
           await DatabaseHelper.instance.saveCallLog(log);
+          _syncController.add(null);
 
           currentActiveCall = null;
           _activeCallController.add(null);
+          break;
+
+        case 'CONTACTS_LIST':
+          try {
+            final List<dynamic> list = msg.data['contacts'] as List<dynamic>? ?? [];
+            final contacts = list.map((c) => ContactModel.fromJson(Map<String, dynamic>.from(c))).toList();
+            await DatabaseHelper.instance.syncContacts(contacts);
+            _syncController.add(null);
+          } catch (e) {
+            debugPrint('[RELAY] Exception processing CONTACTS_LIST: $e');
+          }
+          break;
+
+        case 'CALL_HISTORY':
+          try {
+            final List<dynamic> list = msg.data['history'] as List<dynamic>? ?? [];
+            for (final item in list) {
+              final log = CallLogModel.fromJson(Map<String, dynamic>.from(item));
+              await DatabaseHelper.instance.saveCallLog(log);
+            }
+            _syncController.add(null);
+          } catch (e) {
+            debugPrint('[RELAY] Exception processing CALL_HISTORY: $e');
+          }
           break;
 
         case 'SMS_RECEIVED':
@@ -491,6 +535,7 @@ class RelayClient {
         final List<dynamic> list = jsonDecode(res.body);
         final contacts = list.map((c) => ContactModel.fromJson(Map<String, dynamic>.from(c))).toList();
         await DatabaseHelper.instance.syncContacts(contacts);
+        _syncController.add(null);
       }
     } catch (_) {}
   }
@@ -505,6 +550,7 @@ class RelayClient {
           final log = CallLogModel.fromJson(Map<String, dynamic>.from(item));
           await DatabaseHelper.instance.saveCallLog(log);
         }
+        _syncController.add(null);
       }
     } catch (_) {}
   }

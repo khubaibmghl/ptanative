@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -15,6 +16,7 @@ class RecentsScreen extends StatefulWidget {
 class _RecentsScreenState extends State<RecentsScreen> {
   List<CallLogModel> _logs = [];
   bool _isLoading = true;
+  StreamSubscription? _syncSub;
 
   final List<Color> _avatarColors = const [
     Color(0xFF7A8DBE),
@@ -28,6 +30,15 @@ class _RecentsScreenState extends State<RecentsScreen> {
   void initState() {
     super.initState();
     _loadLogs();
+    _syncSub = RelayClient.instance.syncStream.listen((_) {
+      _loadLogs();
+    });
+  }
+
+  @override
+  void dispose() {
+    _syncSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _loadLogs() async {
