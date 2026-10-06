@@ -12,6 +12,7 @@ import 'screens/recents_screen.dart';
 import 'screens/contacts_screen.dart';
 import 'screens/settings_screen.dart';
 import 'screens/dtmf_sheet.dart';
+import 'screens/in_call_screen.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -125,7 +126,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             bottom: false,
             child: Column(
               children: [
-                _buildDynamicIslandCapsule(),
+                _buildMinimalHeaderDot(),
                 Expanded(
                   child: IndexedStack(
                     index: _currentIndex,
@@ -136,7 +137,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
             ),
           ),
 
-          // Live Active Call Floating Bar
+          // Floating iOS Glass Dock Bar (Centered)
+          Positioned(
+            left: 20,
+            right: 20,
+            bottom: 24,
+            child: _buildLiquidGlassDock(),
+          ),
+
+          // Full-Screen Native InCallScreen Modal Overlay when Active Call is Present
           StreamBuilder<ActiveCallInfo?>(
             stream: RelayClient.instance.activeCallStream,
             initialData: RelayClient.instance.currentActiveCall,
@@ -144,110 +153,65 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
               final activeCall = snapshot.data;
               if (activeCall == null) return const SizedBox.shrink();
 
-              return Positioned(
-                top: LiquidGlassTheme.dynamicIslandTopInset + 44,
-                left: 16,
-                right: 16,
-                child: ActiveCallBar(
-                  callInfo: activeCall,
-                  onOpenDtmf: () => showDtmfKeypadSheet(context),
-                ),
+              return Positioned.fill(
+                child: InCallScreen(callInfo: activeCall),
               );
             },
-          ),
-
-          // Floating iOS 26/27 Liquid Glass Dock Bar & Search Button
-          Positioned(
-            left: 16,
-            right: 16,
-            bottom: 24,
-            child: Row(
-              children: [
-                Expanded(
-                  child: _buildLiquidGlassDock(),
-                ),
-                const SizedBox(width: 10),
-                _buildFloatingSearchButton(),
-              ],
-            ),
           ),
         ],
       ),
     );
   }
 
-  Widget _buildDynamicIslandCapsule() {
+  Widget _buildMinimalHeaderDot() {
     return StreamBuilder<DeviceStatusModel>(
       stream: RelayClient.instance.statusStream,
       initialData: RelayClient.instance.lastStatus,
       builder: (context, snapshot) {
-        final status = snapshot.data;
         final isConnected = RelayClient.instance.isConnected;
-        final isDark = LiquidGlassTheme.isDarkMode;
 
         return Padding(
-          padding: const EdgeInsets.only(top: LiquidGlassTheme.dynamicIslandTopInset, left: 20, right: 20, bottom: 8),
-          child: Container(
-            height: 34,
-            padding: const EdgeInsets.symmetric(horizontal: 14),
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0xFF16161E) : const Color(0xFFEBEBF0),
-              borderRadius: BorderRadius.circular(17),
-              border: Border.all(
-                color: isDark ? Colors.white12 : Colors.black12,
-                width: 0.5,
+          padding: const EdgeInsets.only(top: LiquidGlassTheme.dynamicIslandTopInset + 4, right: 18, bottom: 4),
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: GestureDetector(
+              onTap: () {
+                final status = snapshot.data;
+                showModalBottomSheet(
+                  context: context,
+                  backgroundColor: const Color(0xF0121218),
+                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                  builder: (ctx) => Padding(
+                    padding: const EdgeInsets.all(24),
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+                        Text('Host Device Status', style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+                        const SizedBox(height: 12),
+                        Text('Connection: ${isConnected ? "Connected to Host" : "Disconnected"}', style: const TextStyle(color: Colors.white70)),
+                        Text('Host IP: ${RelayClient.instance.hostIp}', style: const TextStyle(color: Colors.white70)),
+                        Text('Vivo Battery: ${status != null ? "${status.batteryLevel}% ${status.isCharging ? '(Charging)' : ''}" : "Unknown"}', style: const TextStyle(color: Colors.white70)),
+                      ],
+                    ),
+                  ),
+                );
+              },
+              child: Container(
+                width: 10,
+                height: 10,
+                decoration: BoxDecoration(
+                  color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed,
+                  shape: BoxShape.circle,
+                  boxShadow: [
+                    BoxShadow(
+                      color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed).withValues(alpha: 0.6),
+                      blurRadius: 6,
+                      spreadRadius: 1,
+                    ),
+                  ],
+                ),
               ),
-            ),
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.spaceBetween,
-              children: [
-                Row(
-                  children: [
-                    Container(
-                      width: 8,
-                      height: 8,
-                      decoration: BoxDecoration(
-                        color: isConnected
-                            ? (RelayClient.instance.isConnectedViaCloud ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.gsmGreen)
-                            : Colors.orange,
-                        shape: BoxShape.circle,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      isConnected
-                          ? (RelayClient.instance.isConnectedViaCloud
-                              ? 'Vivo S1 • Remote Cloud'
-                              : 'Vivo S1 • ${RelayClient.instance.hostIp}')
-                          : 'Auto-Discovering...',
-                      style: TextStyle(
-                        color: LiquidGlassTheme.textPrimary,
-                        fontSize: 12,
-                        fontWeight: FontWeight.w500,
-                      ),
-                    ),
-                  ],
-                ),
-                Row(
-                  children: [
-                    Text(
-                      status != null ? '${status.batteryLevel}%' : '85%',
-                      style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 12),
-                    ),
-                    const SizedBox(width: 4),
-                    Icon(
-                      status != null && status.isCharging ? Icons.battery_charging_full : Icons.battery_full,
-                      color: LiquidGlassTheme.gsmGreen,
-                      size: 15,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      'Zong 4G',
-                      style: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 11),
-                    ),
-                  ],
-                ),
-              ],
             ),
           ),
         );

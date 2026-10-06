@@ -1,12 +1,15 @@
-﻿import 'dart:async';
+import 'dart:async';
 import 'dart:io';
+import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../models/activity_log.dart';
 import 'relay_server.dart';
 
 class TelephonyMonitor {
+  static const _eventChannel = EventChannel('com.pta.host/telephony_events');
   final RelayServer server;
   Timer? _pollingTimer;
+  StreamSubscription? _nativeStateSubscription;
   bool isMonitoring = false;
 
   String _lastPhase = 'IDLE';
@@ -20,6 +23,17 @@ class TelephonyMonitor {
   void start() {
     if (isMonitoring) return;
     isMonitoring = true;
+
+    // 1. Native EventChannel Receiver
+    _nativeStateSubscription = _eventChannel.receiveBroadcastStream().listen((dynamic event) {
+      if (event is Map) {
+        final state = event['state']?.toString() ?? 'IDLE';
+        final num = event['incomingNumber']?.toString() ?? '';
+        _processNativeCallState(state, num);
+      }
+    }, onError: (_) {});
+
+    // 2. Polling Fallback Timer
     _pollingTimer = Timer.periodic(const Duration(milliseconds: 500), (_) => _tick());
     server.logEvent('Monitor Started', 'Baseband call state listener active', ActivityType.info);
   }
@@ -27,8 +41,60 @@ class TelephonyMonitor {
   void stop() {
     _pollingTimer?.cancel();
     _pollingTimer = null;
+    _nativeStateSubscription?.cancel();
+    _nativeStateSubscription = null;
     isMonitoring = false;
     _lastPhase = 'IDLE';
+  }
+
+  void _processNativeCallState(String state, String incomingNum) {
+    final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
+    if (state == 'RINGING') {
+      if (_lastPhase != 'RINGING') {
+        _lastPhase = 'RINGING';
+        _activeNumber = incomingNum.isNotEmpty ? incomingNum : 'Cellular Call';
+        _talkStartTime = 0;
+
+        String resolvedName = _activeNumber;
+        String? resolvedLabel;
+        for (final c in server.cachedContacts) {
+          if (c.matchesNumber(_activeNumber)) {
+            resolvedName = c.displayName;
+            resolvedLabel = c.getLabelForNumber(_activeNumber);
+            break;
+          }
+        }
+
+        server.logEvent('Incoming Call', '$resolvedName (${PhoneNumberNormalizer.formatForDisplay(_activeNumber)})', ActivityType.call);
+        server.broadcast(RelayMessage.incomingRing(
+          number: _activeNumber,
+          name: resolvedName,
+          label: resolvedLabel,
+        ));
+      }
+    } else if (state == 'OFFHOOK') {
+      if (_lastPhase != 'ACTIVE') {
+        _lastPhase = 'ACTIVE';
+        _talkStartTime = now;
+        server.logEvent('Call Connected', 'Audio via Bluetooth/Earpiece.', ActivityType.call);
+        server.broadcast(RelayMessage.callActive(
+          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
+          startTime: _talkStartTime,
+        ));
+      }
+    } else if (state == 'IDLE') {
+      if (['ACTIVE', 'RINGING', 'DIALING'].contains(_lastPhase)) {
+        final dur = _lastPhase == 'ACTIVE' && _talkStartTime > 0 ? (now - _talkStartTime) : 0;
+        server.logEvent('Call Ended', 'Phase: $_lastPhase | Duration: ${dur}s', ActivityType.info);
+        server.broadcast(RelayMessage.callDisconnected(
+          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
+          duration: dur,
+        ));
+        _lastPhase = 'IDLE';
+        _activeNumber = '';
+        _talkStartTime = 0;
+      }
+    }
   }
 
   Future<void> _tick() async {

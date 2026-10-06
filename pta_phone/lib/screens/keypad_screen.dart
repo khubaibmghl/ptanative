@@ -15,14 +15,14 @@ class KeypadScreen extends StatefulWidget {
 
 class _KeypadScreenState extends State<KeypadScreen> {
   String _digits = '';
-  ContactModel? _matchedContact;
+  List<ContactMatchModel> _matches = [];
 
   void _onDigitPressed(String char) {
     HapticFeedback.lightImpact();
     setState(() {
       _digits += char;
     });
-    _lookupContact();
+    _lookupMatches();
   }
 
   void _onBackspace() {
@@ -31,7 +31,7 @@ class _KeypadScreenState extends State<KeypadScreen> {
       setState(() {
         _digits = _digits.substring(0, _digits.length - 1);
       });
-      _lookupContact();
+      _lookupMatches();
     }
   }
 
@@ -39,40 +39,52 @@ class _KeypadScreenState extends State<KeypadScreen> {
     HapticFeedback.mediumImpact();
     setState(() {
       _digits = '';
-      _matchedContact = null;
+      _matches = [];
     });
   }
 
-  Future<void> _lookupContact() async {
-    if (_digits.length < 3) {
-      setState(() {
-        _matchedContact = null;
-      });
+  Future<void> _lookupMatches() async {
+    if (_digits.isEmpty) {
+      if (mounted) setState(() => _matches = []);
       return;
     }
-    final contact = await DatabaseHelper.instance.findContactByNumber(_digits);
+
+    final List<ContactMatchModel> results = [];
+
+    // Search contacts by number or name
+    final contacts = await DatabaseHelper.instance.searchContacts(_digits);
+    for (final c in contacts) {
+      results.add(ContactMatchModel(
+        name: c.displayName,
+        number: c.primaryNumber,
+      ));
+    }
+
+    // Search recents if needed
+    final logs = await DatabaseHelper.instance.getCallLogs(missedOnly: false);
+    for (final log in logs) {
+      if (log.remoteNumber.contains(_digits) || log.callerName.toLowerCase().contains(_digits.toLowerCase())) {
+        if (!results.any((r) => r.number == log.remoteNumber)) {
+          results.add(ContactMatchModel(
+            name: log.callerName.isNotEmpty ? log.callerName : log.remoteNumber,
+            number: log.remoteNumber,
+          ));
+        }
+      }
+    }
+
     if (mounted) {
       setState(() {
-        _matchedContact = contact;
+        _matches = results;
       });
     }
   }
 
-  void _initiateGsmDial() {
-    if (_digits.isEmpty) return;
+  void _initiateGsmDial([String? targetNumber]) {
+    final numberToDial = targetNumber ?? _digits;
+    if (numberToDial.isEmpty) return;
     HapticFeedback.heavyImpact();
-    RelayClient.instance.dialNumber(_digits);
-  }
-
-  void _openActionPicker() {
-    if (_digits.isEmpty) return;
-    WhatsAppLauncher.showActionPicker(
-      context: context,
-      name: _matchedContact?.displayName ?? '',
-      number: _digits,
-      onZongGsmCall: _initiateGsmDial,
-      onZongSms: () {},
-    );
+    RelayClient.instance.dialNumber(numberToDial);
   }
 
   @override
@@ -81,86 +93,185 @@ class _KeypadScreenState extends State<KeypadScreen> {
 
     return Column(
       children: [
-        const SizedBox(height: 20),
+        const SizedBox(height: 12),
+
+        // Header Top Right Add Contact Icon Button
+        Align(
+          alignment: Alignment.centerRight,
+          padding: const EdgeInsets.only(right: 24, top: 8),
+          child: Container(
+            width: 38,
+            height: 38,
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white12 : const Color(0xFFF0F0F5),
+              shape: BoxShape.circle,
+            ),
+            child: const Icon(Icons.person_add_outlined, color: LiquidGlassTheme.textPrimary, size: 20),
+          ),
+        ),
+
+        const SizedBox(height: 8),
+
+        // Centered Big Dialed Digits Display
         SizedBox(
-          height: 36,
-          child: _matchedContact != null
-              ? Row(
-                  mainAxisAlignment: MainAxisAlignment.center,
-                  children: [
-                    const Icon(Icons.person, color: LiquidGlassTheme.iosBlue, size: 18),
-                    const SizedBox(width: 6),
-                    Text(
-                      _matchedContact!.displayName,
-                      style: const TextStyle(
-                        color: LiquidGlassTheme.iosBlue,
-                        fontSize: 18,
-                        fontWeight: FontWeight.w600,
-                      ),
+          height: 52,
+          child: Center(
+            child: Text(
+              _digits,
+              style: TextStyle(
+                color: LiquidGlassTheme.textPrimary,
+                fontSize: 38,
+                fontWeight: FontWeight.w400,
+                letterSpacing: 2.0,
+              ),
+            ),
+          ),
+        ),
+
+        const SizedBox(height: 8),
+
+        // Intelligent Suggestion Floating Glass Card
+        if (_digits.isNotEmpty && _matches.isNotEmpty)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: 32),
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0x351C1C26) : const Color(0xF5F6F8FC),
+                borderRadius: BorderRadius.circular(20),
+                border: Border.all(
+                  color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                  width: 0.5,
+                ),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: 0.06),
+                    blurRadius: 16,
+                    offset: const Offset(0, 4),
+                  ),
+                ],
+              ),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  // Top Match
+                  InkWell(
+                    onTap: () => _initiateGsmDial(_matches.first.number),
+                    child: Row(
+                      children: [
+                        const Icon(Icons.account_circle, color: LiquidGlassTheme.textSecondary, size: 22),
+                        const SizedBox(width: 10),
+                        Expanded(
+                          child: Text(
+                            _matches.first.name,
+                            style: TextStyle(
+                              color: LiquidGlassTheme.textPrimary,
+                              fontSize: 15,
+                              fontWeight: FontWeight.w600,
+                            ),
+                            maxLines: 1,
+                            overflow: TextOverflow.ellipsis,
+                          ),
+                        ),
+                        Text(
+                          _matches.first.number,
+                          style: TextStyle(
+                            color: LiquidGlassTheme.iosBlue,
+                            fontSize: 15,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                  if (_matches.length > 1) ...[
+                    const Divider(height: 12, color: Colors.white12),
+                    Row(
+                      children: [
+                        const Icon(Icons.search, color: LiquidGlassTheme.textSecondary, size: 18),
+                        const SizedBox(width: 8),
+                        Text(
+                          '${_matches.length - 1} More Results',
+                          style: const TextStyle(
+                            color: LiquidGlassTheme.textSecondary,
+                            fontSize: 13,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
                   ],
-                )
-              : const SizedBox.shrink(),
-        ),
-        Padding(
-          padding: const EdgeInsets.symmetric(horizontal: 24),
-          child: SizedBox(
-            height: 60,
-            child: Row(
-              mainAxisAlignment: MainAxisAlignment.center,
-              children: [
-                Expanded(
-                  child: Text(
-                    _digits.isEmpty ? '' : _digits,
-                    textAlign: TextAlign.center,
-                    style: TextStyle(
-                      color: LiquidGlassTheme.textPrimary,
-                      fontSize: 36,
-                      fontWeight: FontWeight.w300,
-                      letterSpacing: 1.5,
-                    ),
-                  ),
-                ),
-                if (_digits.isNotEmpty)
-                  GestureDetector(
-                    onTap: _onBackspace,
-                    onLongPress: _onClearAll,
-                    child: Padding(
-                      padding: const EdgeInsets.only(left: 8),
-                      child: Icon(
-                        Icons.backspace_outlined,
-                        color: isDark ? Colors.white60 : Colors.black54,
-                        size: 26,
-                      ),
-                    ),
-                  ),
-              ],
+                ],
+              ),
             ),
-          ),
-        ),
+          )
+        else
+          const SizedBox(height: 48),
+
         const Spacer(),
+
+        // Keypad Grid 1-9, *, 0, #
         _buildKeypadGrid(),
-        const SizedBox(height: 20),
-        GestureDetector(
-          onTap: _initiateGsmDial,
-          onLongPress: _openActionPicker,
-          child: Container(
-            width: 74,
-            height: 74,
-            decoration: BoxDecoration(
-              color: LiquidGlassTheme.gsmGreen,
-              shape: BoxShape.circle,
-              boxShadow: [
-                BoxShadow(
-                  color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.35),
-                  blurRadius: 16,
-                  offset: const Offset(0, 6),
+
+        const SizedBox(height: 24),
+
+        // Bottom Controls: Green Call Button & Backspace Icon
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 56),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              const SizedBox(width: 50), // Spacer balancing right backspace
+              const Spacer(),
+              // Green Circular Dial Call Button
+              GestureDetector(
+                onTap: () => _initiateGsmDial(),
+                child: Container(
+                  width: 76,
+                  height: 76,
+                  decoration: BoxDecoration(
+                    color: LiquidGlassTheme.gsmGreen,
+                    shape: BoxShape.circle,
+                    boxShadow: [
+                      BoxShadow(
+                        color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.35),
+                        blurRadius: 18,
+                        offset: const Offset(0, 6),
+                      ),
+                    ],
+                  ),
+                  child: const Icon(Icons.phone, color: Colors.white, size: 34),
                 ),
-              ],
-            ),
-            child: const Icon(Icons.phone, color: Colors.white, size: 34),
+              ),
+              const Spacer(),
+              // Backspace Button
+              SizedBox(
+                width: 50,
+                child: _digits.isNotEmpty
+                    ? GestureDetector(
+                        onTap: _onBackspace,
+                        onLongPress: _onClearAll,
+                        child: Container(
+                          width: 44,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white12 : const Color(0xFFE8E8EE),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          alignment: Alignment.center,
+                          child: const Icon(
+                            Icons.backspace_outlined,
+                            color: LiquidGlassTheme.textPrimary,
+                            size: 20,
+                          ),
+                        ),
+                      )
+                    : const SizedBox.shrink(),
+              ),
+            ],
           ),
         ),
+
         const SizedBox(height: 100),
       ],
     );
@@ -169,27 +280,27 @@ class _KeypadScreenState extends State<KeypadScreen> {
   Widget _buildKeypadGrid() {
     const keys = [
       ['1', ''],
-      ['2', 'ABC'],
-      ['3', 'DEF'],
-      ['4', 'GHI'],
-      ['5', 'JKL'],
-      ['6', 'MNO'],
-      ['7', 'PQRS'],
-      ['8', 'TUV'],
-      ['9', 'WXYZ'],
+      ['2', 'A B C'],
+      ['3', 'D E F'],
+      ['4', 'G H I'],
+      ['5', 'J K L'],
+      ['6', 'M N O'],
+      ['7', 'P Q R S'],
+      ['8', 'T U V'],
+      ['9', 'W X Y Z'],
       ['*', ''],
       ['0', '+'],
       ['#', ''],
     ];
 
     return Padding(
-      padding: const EdgeInsets.symmetric(horizontal: 44),
+      padding: const EdgeInsets.symmetric(horizontal: 40),
       child: Wrap(
         spacing: 24,
         runSpacing: 16,
         alignment: WrapAlignment.center,
         children: keys.map((k) {
-          return _KeypadButton(
+          return _KeypadBubbleButton(
             digit: k[0],
             letters: k[1],
             onTap: () => _onDigitPressed(k[0]),
@@ -201,13 +312,21 @@ class _KeypadScreenState extends State<KeypadScreen> {
   }
 }
 
-class _KeypadButton extends StatelessWidget {
+class ContactMatchModel {
+  final String name;
+  final String number;
+
+  ContactMatchModel({required this.name, required this.number});
+}
+
+/// Keypad Button with Elastic Spring Bubble Touch Animation
+class _KeypadBubbleButton extends StatefulWidget {
   final String digit;
   final String letters;
   final VoidCallback onTap;
   final VoidCallback? onLongPress;
 
-  const _KeypadButton({
+  const _KeypadBubbleButton({
     required this.digit,
     required this.letters,
     required this.onTap,
@@ -215,54 +334,73 @@ class _KeypadButton extends StatelessWidget {
   });
 
   @override
+  State<_KeypadBubbleButton> createState() => _KeypadBubbleButtonState();
+}
+
+class _KeypadBubbleButtonState extends State<_KeypadBubbleButton> {
+  bool _isPressed = false;
+
+  @override
   Widget build(BuildContext context) {
     final isDark = LiquidGlassTheme.isDarkMode;
 
     return GestureDetector(
-      onTap: onTap,
-      onLongPress: onLongPress,
-      child: Container(
-        width: 76,
-        height: 76,
-        decoration: BoxDecoration(
-          color: isDark ? const Color(0x22FFFFFF) : const Color(0xFFF4F4F8),
-          shape: BoxShape.circle,
-          border: Border.all(
-            color: isDark ? const Color(0x28FFFFFF) : const Color(0x1F000000),
-            width: 0.5,
-          ),
-          boxShadow: isDark
-              ? null
-              : [
-                  BoxShadow(
-                    color: Colors.black.withValues(alpha: 0.04),
-                    blurRadius: 8,
-                    offset: const Offset(0, 3),
-                  ),
-                ],
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: [
-            Text(
-              digit,
-              style: TextStyle(
-                color: LiquidGlassTheme.textPrimary,
-                fontSize: 32,
-                fontWeight: FontWeight.w400,
-              ),
+      onTapDown: (_) => setState(() => _isPressed = true),
+      onTapUp: (_) {
+        setState(() => _isPressed = false);
+        widget.onTap();
+      },
+      onTapCancel: () => setState(() => _isPressed = false),
+      onLongPress: widget.onLongPress,
+      child: AnimatedScale(
+        scale: _isPressed ? 0.91 : 1.0,
+        duration: const Duration(milliseconds: 100),
+        curve: Curves.easeOutCubic,
+        child: Container(
+          width: 76,
+          height: 76,
+          decoration: BoxDecoration(
+            color: _isPressed
+                ? (isDark ? const Color(0x40FFFFFF) : const Color(0xFFE2E2EA))
+                : (isDark ? const Color(0x22FFFFFF) : const Color(0xFFF4F4F8)),
+            shape: BoxShape.circle,
+            border: Border.all(
+              color: isDark ? const Color(0x28FFFFFF) : const Color(0x1F000000),
+              width: 0.5,
             ),
-            if (letters.isNotEmpty)
+            boxShadow: isDark
+                ? null
+                : [
+                    BoxShadow(
+                      color: Colors.black.withValues(alpha: _isPressed ? 0.01 : 0.05),
+                      blurRadius: _isPressed ? 3 : 8,
+                      offset: const Offset(0, 3),
+                    ),
+                  ],
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
               Text(
-                letters,
+                widget.digit,
                 style: TextStyle(
                   color: LiquidGlassTheme.textPrimary,
-                  fontSize: 10,
-                  letterSpacing: 1.5,
-                  fontWeight: FontWeight.bold,
+                  fontSize: 32,
+                  fontWeight: FontWeight.w400,
                 ),
               ),
-          ],
+              if (widget.letters.isNotEmpty)
+                Text(
+                  widget.letters,
+                  style: TextStyle(
+                    color: LiquidGlassTheme.textPrimary,
+                    fontSize: 9,
+                    letterSpacing: 1.2,
+                    fontWeight: FontWeight.bold,
+                  ),
+                ),
+            ],
+          ),
         ),
       ),
     );

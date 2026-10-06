@@ -8,12 +8,15 @@ import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import 'callkit_service.dart';
 
+enum PhoneCallState { dialing, ringing, connected }
+
 class ActiveCallInfo {
   final String number;
   final String callerName;
   final String? label;
-  final int startTime; // Epoch millis
+  final int startTime; // Epoch millis (0 if not answered yet)
   final bool isIncoming;
+  final PhoneCallState state;
 
   ActiveCallInfo({
     required this.number,
@@ -21,6 +24,7 @@ class ActiveCallInfo {
     this.label,
     required this.startTime,
     required this.isIncoming,
+    this.state = PhoneCallState.connected,
   });
 }
 
@@ -84,10 +88,22 @@ class RelayClient {
       socket.broadcastEnabled = true;
       final msg = 'PTA_DISCOVER_REQUEST'.codeUnits;
 
-      // Broadcast to standard broadcast address
+      // Broadcast to standard broadcast address & port 8081
       socket.send(msg, InternetAddress('255.255.255.255'), 8081);
 
-      // Probe active local subnets and common hotspot gateway IPs
+      // Probe common Android hotspot default gateways (Vivo / Samsung / Pixel)
+      const commonHotspotGateways = [
+        '192.168.43.1',
+        '192.168.170.1',
+        '192.168.23.1',
+        '192.168.1.1',
+        '10.0.0.1',
+      ];
+      for (final gw in commonHotspotGateways) {
+        socket.send(msg, InternetAddress(gw), 8081);
+      }
+
+      // Probe active local subnets
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
@@ -118,8 +134,14 @@ class RelayClient {
         }
       });
 
-      final discoveredIp = await completer.future.timeout(const Duration(milliseconds: 1200), onTimeout: () => null);
+      final discoveredIp = await completer.future.timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
       socket.close();
+
+      if (discoveredIp != null && discoveredIp.isNotEmpty) {
+        hostIp = discoveredIp;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('host_ip', hostIp);
+      }
       return discoveredIp;
     } catch (_) {
       return null;
@@ -285,34 +307,41 @@ class RelayClient {
           final label = msg.data['label'] as String?;
 
           // Show native Apple CallKit Incoming Screen (Slide to Answer)
-          await CallKitService.instance.showIncomingCall(
-            callId: 'ring_${DateTime.now().millisecondsSinceEpoch}',
-            callerName: name,
-            handle: number,
-            label: label,
-          );
+          try {
+            await CallKitService.instance.showIncomingCall(
+              callId: CallKitService.generateUuid(),
+              callerName: name,
+              handle: number,
+              label: label,
+            );
+          } catch (e) {
+            debugPrint('[RELAY] Exception showing CallKit incoming call: $e');
+          }
 
           currentActiveCall = ActiveCallInfo(
             number: number,
             callerName: name,
             label: label,
-            startTime: DateTime.now().millisecondsSinceEpoch,
+            startTime: 0,
             isIncoming: true,
+            state: PhoneCallState.ringing,
           );
           _activeCallController.add(currentActiveCall);
           break;
 
         case 'CALL_ACTIVE':
           final number = msg.data['number'] as String? ?? '';
-          final startTime = msg.data['startTime'] as int? ?? DateTime.now().millisecondsSinceEpoch;
+          final startTimeRaw = msg.data['startTime'] as int? ?? (DateTime.now().millisecondsSinceEpoch ~/ 1000);
+          final startTimeMs = startTimeRaw < 100000000000 ? startTimeRaw * 1000 : startTimeRaw;
 
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           currentActiveCall = ActiveCallInfo(
-            number: number,
-            callerName: contact?.displayName ?? '',
-            label: contact?.getLabelForNumber(number),
-            startTime: startTime,
+            number: number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call'),
+            callerName: contact?.displayName ?? (currentActiveCall?.callerName ?? ''),
+            label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
+            startTime: startTimeMs,
             isIncoming: currentActiveCall?.isIncoming ?? false,
+            state: PhoneCallState.connected,
           );
           _activeCallController.add(currentActiveCall);
           break;
@@ -370,8 +399,9 @@ class RelayClient {
       number: clean,
       callerName: contact?.displayName ?? '',
       label: contact?.getLabelForNumber(clean),
-      startTime: DateTime.now().millisecondsSinceEpoch,
+      startTime: 0,
       isIncoming: false,
+      state: PhoneCallState.dialing,
     );
     _activeCallController.add(currentActiveCall);
 

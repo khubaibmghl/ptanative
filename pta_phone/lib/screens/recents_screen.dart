@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
-import '../services/whatsapp_launcher.dart';
 import '../theme/liquid_glass_theme.dart';
 
 class RecentsScreen extends StatefulWidget {
@@ -14,9 +13,16 @@ class RecentsScreen extends StatefulWidget {
 }
 
 class _RecentsScreenState extends State<RecentsScreen> {
-  int _selectedFilter = 0; // 0 = All, 1 = Missed
   List<CallLogModel> _logs = [];
   bool _isLoading = true;
+
+  final List<Color> _avatarColors = const [
+    Color(0xFF7A8DBE),
+    Color(0xFF8B7ABE),
+    Color(0xFFBE7A93),
+    Color(0xFF5A9B8D),
+    Color(0xFFB57ABE),
+  ];
 
   @override
   void initState() {
@@ -25,9 +31,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
   }
 
   Future<void> _loadLogs() async {
-    final logs = await DatabaseHelper.instance.getCallLogs(
-      missedOnly: _selectedFilter == 1,
-    );
+    final logs = await DatabaseHelper.instance.getCallLogs(missedOnly: false);
     if (mounted) {
       setState(() {
         _logs = logs;
@@ -36,31 +40,71 @@ class _RecentsScreenState extends State<RecentsScreen> {
     }
   }
 
+  Color _getAvatarColor(String name) {
+    if (name.isEmpty) return _avatarColors[0];
+    final hash = name.codeUnits.fold<int>(0, (prev, elem) => prev + elem);
+    return _avatarColors[hash % _avatarColors.length];
+  }
+
+  String _getInitials(String name) {
+    if (name.isEmpty) return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, 1).toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: const Text('Recents'),
-        bottom: PreferredSize(
-          preferredSize: const Size.fromHeight(48),
-          child: Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 20, vertical: 6),
-            child: Container(
-              height: 36,
-              decoration: BoxDecoration(
-                color: const Color(0x28FFFFFF),
-                borderRadius: BorderRadius.circular(18),
-              ),
-              child: Row(
-                children: [
-                  _buildFilterTab('All', 0),
-                  _buildFilterTab('Missed', 1),
-                ],
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        leading: Padding(
+          padding: const EdgeInsets.only(left: 16, top: 10, bottom: 10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+              borderRadius: BorderRadius.circular(16),
+            ),
+            alignment: Alignment.center,
+            child: const Text(
+              'Edit',
+              style: TextStyle(
+                color: LiquidGlassTheme.iosBlue,
+                fontSize: 14,
+                fontWeight: FontWeight.w600,
               ),
             ),
           ),
         ),
+        title: Text(
+          'Calls',
+          style: TextStyle(
+            color: LiquidGlassTheme.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 16),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.filter_list, color: LiquidGlassTheme.textPrimary, size: 20),
+            ),
+          ),
+        ],
       ),
       body: RefreshIndicator(
         onRefresh: () async {
@@ -77,142 +121,144 @@ class _RecentsScreenState extends State<RecentsScreen> {
                     ),
                   )
                 : ListView.separated(
-                    padding: const EdgeInsets.only(left: 16, right: 16, top: 12, bottom: 100),
+                    padding: const EdgeInsets.only(top: 8, bottom: 100),
                     itemCount: _logs.length,
-                    separatorBuilder: (context, index) => const Divider(
-                      color: Colors.white10,
+                    separatorBuilder: (context, index) => Divider(
+                      color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
                       height: 1,
-                      indent: 48,
+                      indent: 68,
                     ),
                     itemBuilder: (context, index) {
                       final item = _logs[index];
-                      return _buildCallLogTile(item);
+                      return _buildCallLogItem(item);
                     },
                   ),
       ),
     );
   }
 
-  Widget _buildFilterTab(String title, int index) {
-    final isSelected = _selectedFilter == index;
-    return Expanded(
-      child: GestureDetector(
-        onTap: () {
-          HapticFeedback.selectionClick();
-          setState(() {
-            _selectedFilter = index;
-          });
-          _loadLogs();
-        },
-        child: Container(
-          decoration: BoxDecoration(
-            color: isSelected ? const Color(0x60FFFFFF) : Colors.transparent,
-            borderRadius: BorderRadius.circular(18),
-          ),
-          alignment: Alignment.center,
-          child: Text(
-            title,
-            style: TextStyle(
-              color: isSelected ? Colors.white : LiquidGlassTheme.textSecondary,
-              fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
-              fontSize: 13,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildCallLogTile(CallLogModel log) {
+  Widget _buildCallLogItem(CallLogModel log) {
     final isMissed = log.callType == CallType.missed;
-    final isWhatsApp = log.serviceType == ServiceType.whatsapp;
-
     final displayName = log.callerName.isNotEmpty ? log.callerName : log.remoteNumber;
+    final initials = _getInitials(displayName);
+    final avatarBgColor = _getAvatarColor(displayName);
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-      leading: Icon(
-        log.callType == CallType.outgoing
-            ? Icons.call_made
-            : (isMissed ? Icons.call_missed : Icons.call_received),
-        color: isMissed ? LiquidGlassTheme.crimsonRed : Colors.white60,
-        size: 20,
-      ),
-      title: Row(
-        children: [
-          Expanded(
-            child: Text(
-              displayName,
-              style: TextStyle(
-                color: isMissed ? LiquidGlassTheme.crimsonRed : LiquidGlassTheme.textPrimary,
-                fontWeight: FontWeight.w600,
-                fontSize: 16,
-              ),
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-            ),
-          ),
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-            decoration: BoxDecoration(
-              color: isWhatsApp
-                  ? LiquidGlassTheme.whatsappGreen.withValues(alpha: 0.18)
-                  : LiquidGlassTheme.gsmGreen.withValues(alpha: 0.18),
-              borderRadius: BorderRadius.circular(6),
-            ),
-            child: Text(
-              isWhatsApp ? 'WhatsApp' : 'Zong GSM',
-              style: TextStyle(
-                color: isWhatsApp ? LiquidGlassTheme.whatsappGreen : LiquidGlassTheme.gsmGreen,
-                fontSize: 10,
-                fontWeight: FontWeight.w600,
-              ),
-            ),
-          ),
-        ],
-      ),
-      subtitle: Row(
-        children: [
-          if (log.numberLabel != null) ...[
-            Text(
-              log.numberLabel!,
-              style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13),
-            ),
-            const Text(' • ', style: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13)),
-          ],
-          Text(
-            log.durationText,
-            style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13),
-          ),
-        ],
-      ),
-      trailing: Row(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Text(
-            log.dateFormatted,
-            style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13),
-          ),
-          const SizedBox(width: 8),
-          IconButton(
-            icon: const Icon(Icons.info_outline, color: LiquidGlassTheme.accentBlue, size: 22),
-            onPressed: () {
-              WhatsAppLauncher.showActionPicker(
-                context: context,
-                name: log.callerName,
-                number: log.remoteNumber,
-                label: log.numberLabel,
-                onZongGsmCall: () => RelayClient.instance.dialNumber(log.remoteNumber),
-                onZongSms: () {},
-              );
-            },
-          ),
-        ],
-      ),
+    final arrow = log.callType == CallType.outgoing ? '↗' : '↙';
+    final durString = isMissed
+        ? 'Missed'
+        : (log.durationSeconds > 0
+            ? '${(log.durationSeconds ~/ 60).toString().padLeft(2, '0')}:${(log.durationSeconds % 60).toString().padLeft(2, '0')}'
+            : '00:00');
+
+    return InkWell(
       onTap: () {
         HapticFeedback.lightImpact();
         RelayClient.instance.dialNumber(log.remoteNumber);
       },
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
+        child: Row(
+          children: [
+            // Left Initials Avatar Circle
+            Container(
+              width: 44,
+              height: 44,
+              decoration: BoxDecoration(
+                color: avatarBgColor,
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: Text(
+                initials,
+                style: const TextStyle(
+                  color: Colors.white,
+                  fontSize: 16,
+                  fontWeight: FontWeight.bold,
+                ),
+              ),
+            ),
+            const SizedBox(width: 14),
+
+            // Caller Name & Details
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  Text(
+                    displayName,
+                    style: TextStyle(
+                      color: isMissed ? const Color(0xFFFF3B30) : LiquidGlassTheme.textPrimary,
+                      fontSize: 16,
+                      fontWeight: FontWeight.w600,
+                    ),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                  const SizedBox(height: 3),
+                  Row(
+                    children: [
+                      Text(
+                        '$arrow Zong GSM',
+                        style: const TextStyle(
+                          color: LiquidGlassTheme.textSecondary,
+                          fontSize: 13,
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 5, vertical: 1),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.1),
+                          borderRadius: BorderRadius.circular(4),
+                        ),
+                        child: Text(
+                          durString,
+                          style: const TextStyle(
+                            color: LiquidGlassTheme.textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+
+            // Time Label
+            Text(
+              log.dateFormatted,
+              style: const TextStyle(
+                color: LiquidGlassTheme.textSecondary,
+                fontSize: 13,
+              ),
+            ),
+            const SizedBox(width: 12),
+
+            // Redial Blue Circular Phone Icon Button
+            GestureDetector(
+              onTap: () {
+                HapticFeedback.mediumImpact();
+                RelayClient.instance.dialNumber(log.remoteNumber);
+              },
+              child: Container(
+                width: 34,
+                height: 34,
+                decoration: const BoxDecoration(
+                  color: Color(0xFFE8F1FF),
+                  shape: BoxShape.circle,
+                ),
+                child: const Icon(
+                  Icons.phone,
+                  color: LiquidGlassTheme.iosBlue,
+                  size: 18,
+                ),
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

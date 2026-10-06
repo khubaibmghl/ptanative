@@ -53,6 +53,10 @@ class RelayServer {
     debugPrint('[ACTIVITY] ${entry.timeFormatted} | $title - $subtitle');
   }
 
+  Timer? _idleTimer;
+  int _lastDisconnectTime = 0;
+  bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
+
   /// Starts the embedded HTTP & WebSocket server on 0.0.0.0:8080 and UDP discovery on 8081
   Future<bool> startServer() async {
     if (_server != null) return true;
@@ -60,7 +64,8 @@ class RelayServer {
     try {
       final wsHandler = webSocketHandler((WebSocketChannel socket, String? protocol) {
         _connectedSockets.add(socket);
-        logEvent('Client Connected', 'iPhone 15 Pro paired via WebSocket', ActivityType.success);
+        _lastDisconnectTime = 0;
+        logEvent('Client Connected', 'iPhone paired via WebSocket', ActivityType.success);
 
         // Send initial state & device status
         socket.sink.add(jsonEncode({
@@ -82,10 +87,12 @@ class RelayServer {
           },
           onDone: () {
             _connectedSockets.remove(socket);
+            _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
             logEvent('Client Disconnected', 'iPhone socket closed', ActivityType.info);
           },
           onError: (err) {
             _connectedSockets.remove(socket);
+            _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
             logEvent('Socket Error', err.toString(), ActivityType.error);
           },
         );
@@ -96,7 +103,13 @@ class RelayServer {
       _server = await shelf_io.serve(cascade.handler, InternetAddress.anyIPv4, port);
       logEvent('Server Started', 'Listening on 0.0.0.0:$port', ActivityType.success);
 
+      // Start Unkillable Native Android Foreground Service
+      try {
+        const MethodChannel('com.pta.host/telephony_methods').invokeMethod('startService');
+      } catch (_) {}
+
       _startUdpDiscoveryListener();
+      _startIdleCheckTimer();
       connectCloudBridge();
 
       return true;
@@ -104,6 +117,20 @@ class RelayServer {
       logEvent('Server Error', 'Failed to bind port $port: $e', ActivityType.error);
       return false;
     }
+  }
+
+  void _startIdleCheckTimer() {
+    _idleTimer?.cancel();
+    _idleTimer = Timer.periodic(const Duration(minutes: 1), (_) {
+      if (!enable30MinIdleShutdown) return;
+      if (_connectedSockets.isEmpty && _lastDisconnectTime > 0) {
+        final elapsed = (DateTime.now().millisecondsSinceEpoch - _lastDisconnectTime) ~/ 1000;
+        if (elapsed >= 1800) { // 30 minutes = 1800 seconds
+          logEvent('Idle Timeout', 'No iPhone connected for 30 mins. Auto-stopping relay.', ActivityType.info);
+          stopServer();
+        }
+      }
+    });
   }
 
   void _startUdpDiscoveryListener() async {
@@ -115,7 +142,7 @@ class RelayServer {
           final dg = _udpSocket?.receive();
           if (dg != null) {
             final msg = String.fromCharCodes(dg.data).trim();
-            if (msg == 'PTA_DISCOVER_REQUEST') {
+            if (msg == 'PTA_DISCOVER_REQUEST' || msg.contains('DISCOVER')) {
               final reply = jsonEncode({
                 'app': 'pta_host',
                 'port': port,
@@ -135,8 +162,14 @@ class RelayServer {
 
   /// Stops the server cleanly
   Future<void> stopServer() async {
+    _idleTimer?.cancel();
+    _idleTimer = null;
     _udpSocket?.close();
     _udpSocket = null;
+
+    try {
+      const MethodChannel('com.pta.host/telephony_methods').invokeMethod('stopService');
+    } catch (_) {}
 
     for (final s in _connectedSockets) {
       try {

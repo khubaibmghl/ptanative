@@ -1,8 +1,10 @@
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 class TelephonyController {
+  static const _channel = MethodChannel('com.pta.host/telephony_methods');
   bool isAdbConnected = false;
   String adbDeviceId = 'localhost:5555';
 
@@ -33,7 +35,14 @@ class TelephonyController {
 
   /// Multi-tier hardware call acceptance pipeline
   Future<void> answerCall() async {
-    debugPrint('[TELEPHONY] Answering call via hardware pipeline...');
+    debugPrint('[TELEPHONY] Answering call via native & hardware pipeline...');
+    try {
+      final ok = await _channel.invokeMethod<bool>('answerCall');
+      if (ok == true) return;
+    } catch (e) {
+      debugPrint('[TELEPHONY] Native answer error: $e');
+    }
+
     try {
       if (isAdbConnected) {
         await Process.run('adb', ['-s', adbDeviceId, 'shell', 'telecom', 'accept-ringing-call']);
@@ -52,7 +61,14 @@ class TelephonyController {
 
   /// Multi-tier hardware call termination pipeline
   Future<void> hangupCall() async {
-    debugPrint('[TELEPHONY] Dropping call via hardware pipeline...');
+    debugPrint('[TELEPHONY] Dropping call via native & hardware pipeline...');
+    try {
+      final ok = await _channel.invokeMethod<bool>('endCall');
+      if (ok == true) return;
+    } catch (e) {
+      debugPrint('[TELEPHONY] Native endCall error: $e');
+    }
+
     try {
       if (isAdbConnected) {
         await Process.run('adb', ['-s', adbDeviceId, 'shell', 'telecom', 'end-call']);
@@ -66,33 +82,39 @@ class TelephonyController {
     }
   }
 
-  /// Outgoing call dialing via Native Intent & ADB Pipeline
+  /// Outgoing call dialing via Native Intent & Direct Action CALL
   Future<void> dialNumber(String number) async {
     final clean = number.trim();
     if (clean.isEmpty) return;
 
-    // Tier 1: Native Android Telephony Intent via url_launcher
+    // Tier 1: Native Android ACTION_CALL via MethodChannel
     try {
-      final uri = Uri.parse('tel:$clean');
-      if (await canLaunchUrl(uri)) {
-        await launchUrl(uri);
-        debugPrint('[TELEPHONY] Dialed $clean via native url_launcher Intent');
+      final ok = await _channel.invokeMethod<bool>('dialNumber', {'number': clean});
+      if (ok == true) {
+        debugPrint('[TELEPHONY] Dialed $clean directly via native ACTION_CALL');
         return;
       }
     } catch (e) {
       debugPrint('[TELEPHONY] Native dial error: $e');
     }
 
-    // Tier 2: ADB Shell Call Intent
+    // Tier 2: ADB Shell Direct CALL Intent
     try {
       if (isAdbConnected) {
         await Process.run('adb', ['-s', adbDeviceId, 'shell', 'am', 'start', '-a', 'android.intent.action.CALL', '-d', 'tel:$clean']);
-      } else {
-        await Process.run('am', ['start', '-a', 'android.intent.action.CALL', '-d', 'tel:$clean']);
+        return;
       }
     } catch (e) {
       debugPrint('[TELEPHONY] ADB dial error: $e');
     }
+
+    // Tier 3: Fallback url_launcher
+    try {
+      final uri = Uri.parse('tel:$clean');
+      if (await canLaunchUrl(uri)) {
+        await launchUrl(uri);
+      }
+    } catch (_) {}
   }
 
   /// In-Call DTMF digit transmission for IVR / Customer helpline calls

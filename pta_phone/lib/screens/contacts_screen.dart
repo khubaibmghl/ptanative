@@ -3,7 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
-import '../services/whatsapp_launcher.dart';
 import '../theme/liquid_glass_theme.dart';
 
 class ContactsScreen extends StatefulWidget {
@@ -15,8 +14,15 @@ class ContactsScreen extends StatefulWidget {
 
 class _ContactsScreenState extends State<ContactsScreen> {
   List<ContactModel> _contacts = [];
+  Map<String, List<ContactModel>> _groupedContacts = {};
+  List<String> _alphabetKeys = [];
   bool _isLoading = true;
-  String _searchQuery = '';
+  final ScrollController _scrollController = ScrollController();
+
+  final List<String> _fullAlphabet = const [
+    'A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M',
+    'N', 'O', 'P', 'Q', 'R', 'S', 'T', 'U', 'V', 'W', 'X', 'Y', 'Z', '#'
+  ];
 
   @override
   void initState() {
@@ -25,14 +31,48 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 
   Future<void> _loadContacts() async {
-    final list = _searchQuery.isEmpty
-        ? await DatabaseHelper.instance.getContacts()
-        : await DatabaseHelper.instance.searchContacts(_searchQuery);
+    final list = await DatabaseHelper.instance.getContacts();
+
+    // Group contacts alphabetically
+    final Map<String, List<ContactModel>> grouped = {};
+    for (final c in list) {
+      final letter = c.displayName.isNotEmpty
+          ? c.displayName.substring(0, 1).toUpperCase()
+          : '#';
+      final key = RegExp(r'[A-Z]').hasMatch(letter) ? letter : '#';
+      grouped.putIfAbsent(key, () => []).add(c);
+    }
+
+    final keys = grouped.keys.toList()..sort();
+
     if (mounted) {
       setState(() {
         _contacts = list;
+        _groupedContacts = grouped;
+        _alphabetKeys = keys;
         _isLoading = false;
       });
+    }
+  }
+
+  void _scrollToLetter(String letter) {
+    HapticFeedback.selectionClick();
+    if (!_alphabetKeys.contains(letter)) return;
+
+    // Approximate scroll offset calculation
+    int itemCountBefore = 1; // "My Card" row
+    for (final k in _alphabetKeys) {
+      if (k == letter) break;
+      itemCountBefore += 1 + (_groupedContacts[k]?.length ?? 0); // 1 header + items
+    }
+
+    final offset = itemCountBefore * 56.0;
+    if (_scrollController.hasClients) {
+      _scrollController.animateTo(
+        offset.clamp(0.0, _scrollController.position.maxScrollExtent),
+        duration: const Duration(milliseconds: 250),
+        curve: Curves.easeOut,
+      );
     }
   }
 
@@ -46,128 +86,216 @@ class _ContactsScreenState extends State<ContactsScreen> {
     );
   }
 
+  String _getInitials(String name) {
+    if (name.isEmpty) return '?';
+    final parts = name.trim().split(RegExp(r'\s+'));
+    if (parts.length >= 2) {
+      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+    }
+    return name.substring(0, 1).toUpperCase();
+  }
+
   @override
   Widget build(BuildContext context) {
+    final isDark = LiquidGlassTheme.isDarkMode;
+
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: const Text('Contacts'),
-      ),
-      body: Column(
-        children: [
-          // Liquid Glass Search Field
-          Padding(
-            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-            child: GlassCard(
-              borderRadius: 14,
-              padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-              child: Row(
-                children: [
-                  const Icon(Icons.search, color: LiquidGlassTheme.textSecondary, size: 20),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: TextField(
-                      style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 16),
-                      decoration: const InputDecoration(
-                        hintText: 'Search contacts or numbers',
-                        hintStyle: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 15),
-                        border: InputBorder.none,
-                        isDense: true,
-                        contentPadding: EdgeInsets.zero,
-                      ),
-                      onChanged: (val) {
-                        _searchQuery = val;
-                        _loadContacts();
-                      },
-                    ),
-                  ),
-                ],
-              ),
+        backgroundColor: Colors.transparent,
+        elevation: 0,
+        centerTitle: true,
+        leading: Padding(
+          padding: const EdgeInsets.all(10),
+          child: Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+              shape: BoxShape.circle,
             ),
+            child: const Icon(Icons.arrow_back_ios_new, color: LiquidGlassTheme.iosBlue, size: 16),
           ),
-          Expanded(
-            child: RefreshIndicator(
-              onRefresh: () async {
-                await RelayClient.instance.fetchContacts();
-                await _loadContacts();
-              },
-              child: _isLoading
-                  ? const Center(child: CircularProgressIndicator())
-                  : _contacts.isEmpty
-                      ? const Center(
-                          child: Text(
-                            'No contacts found',
-                            style: TextStyle(color: LiquidGlassTheme.textSecondary),
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.only(left: 16, right: 16, bottom: 100),
-                          itemCount: _contacts.length,
-                          separatorBuilder: (context, index) => const Divider(
-                            color: Colors.white10,
-                            height: 1,
-                            indent: 52,
-                          ),
-                          itemBuilder: (context, index) {
-                            final contact = _contacts[index];
-                            return _buildContactTile(contact);
-                          },
-                        ),
+        ),
+        title: Text(
+          'Contacts',
+          style: TextStyle(
+            color: LiquidGlassTheme.textPrimary,
+            fontSize: 18,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+        actions: [
+          Padding(
+            padding: const EdgeInsets.only(right: 12),
+            child: Container(
+              width: 36,
+              height: 36,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.add, color: LiquidGlassTheme.textPrimary, size: 22),
             ),
           ),
         ],
       ),
-    );
-  }
+      body: Stack(
+        children: [
+          RefreshIndicator(
+            onRefresh: () async {
+              await RelayClient.instance.fetchContacts();
+              await _loadContacts();
+            },
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator())
+                : CustomScrollView(
+                    controller: _scrollController,
+                    slivers: [
+                      // 1. "My Card" Profile Tile
+                      SliverToBoxAdapter(
+                        child: Padding(
+                          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                          child: Row(
+                            children: [
+                              Container(
+                                width: 50,
+                                height: 50,
+                                decoration: const BoxDecoration(
+                                  color: Color(0xFF7A8DBE),
+                                  shape: BoxShape.circle,
+                                ),
+                                alignment: Alignment.center,
+                                child: const Text(
+                                  'KA',
+                                  style: TextStyle(color: Colors.white, fontSize: 18, fontWeight: FontWeight.bold),
+                                ),
+                              ),
+                              const SizedBox(width: 14),
+                              Column(
+                                crossAxisAlignment: CrossAxisAlignment.start,
+                                children: [
+                                  Text(
+                                    'Khubaib Ahmad',
+                                    style: TextStyle(
+                                      color: LiquidGlassTheme.textPrimary,
+                                      fontSize: 17,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const Text(
+                                    'My Card',
+                                    style: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ),
+                      ),
 
-  Widget _buildContactTile(ContactModel contact) {
-    final initial = contact.displayName.isNotEmpty
-        ? contact.displayName.substring(0, 1).toUpperCase()
-        : '?';
+                      // 2. Alphabetical Grouped Sections
+                      ..._alphabetKeys.map((letter) {
+                        final contactsInGroup = _groupedContacts[letter] ?? [];
+                        return SliverMainAxisGroup(
+                          headers: [
+                            SliverToBoxAdapter(
+                              child: Container(
+                                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
+                                child: Text(
+                                  letter,
+                                  style: const TextStyle(
+                                    color: LiquidGlassTheme.textSecondary,
+                                    fontSize: 13,
+                                    fontWeight: FontWeight.bold,
+                                  ),
+                                ),
+                              ),
+                            ),
+                          ],
+                          slivers: [
+                            SliverList(
+                              delegate: SliverChildBuilderDelegate(
+                                (context, index) {
+                                  final contact = contactsInGroup[index];
+                                  final initials = _getInitials(contact.displayName);
 
-    return ListTile(
-      contentPadding: const EdgeInsets.symmetric(horizontal: 4, vertical: 2),
-      leading: Container(
-        width: 40,
-        height: 40,
-        decoration: BoxDecoration(
-          color: const Color(0x35FFFFFF),
-          shape: BoxShape.circle,
-          border: Border.all(color: const Color(0x2EFFFFFF), width: 0.75),
-        ),
-        alignment: Alignment.center,
-        child: Text(
-          initial,
-          style: const TextStyle(
-            color: LiquidGlassTheme.textPrimary,
-            fontSize: 16,
-            fontWeight: FontWeight.w600,
+                                  return Column(
+                                    children: [
+                                      ListTile(
+                                        contentPadding: const EdgeInsets.symmetric(horizontal: 16),
+                                        leading: Container(
+                                          width: 40,
+                                          height: 40,
+                                          decoration: const BoxDecoration(
+                                            color: Color(0xFF8B9CBF),
+                                            shape: BoxShape.circle,
+                                          ),
+                                          alignment: Alignment.center,
+                                          child: Text(
+                                            initials,
+                                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
+                                          ),
+                                        ),
+                                        title: Text(
+                                          contact.displayName,
+                                          style: TextStyle(
+                                            color: LiquidGlassTheme.textPrimary,
+                                            fontSize: 16,
+                                            fontWeight: FontWeight.w600,
+                                          ),
+                                        ),
+                                        onTap: () => _openContactDetail(contact),
+                                      ),
+                                      Divider(
+                                        color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                                        height: 1,
+                                        indent: 68,
+                                      ),
+                                    ],
+                                  );
+                                },
+                                childCount: contactsInGroup.length,
+                              ),
+                            ),
+                          ],
+                        );
+                      }),
+                      const SliverToBoxAdapter(child: SizedBox(height: 100)),
+                    ],
+                  ),
           ),
-        ),
+
+          // 3. Right-Side Vertical A-Z Fast Scroll Index Slider
+          Positioned(
+            right: 4,
+            top: 20,
+            bottom: 100,
+            child: Center(
+              child: SingleChildScrollView(
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  children: _fullAlphabet.map((char) {
+                    final hasContacts = _alphabetKeys.contains(char);
+                    return GestureDetector(
+                      onTap: () => _scrollToLetter(char),
+                      child: Padding(
+                        padding: const EdgeInsets.symmetric(vertical: 1.5, horizontal: 4),
+                        child: Text(
+                          char,
+                          style: TextStyle(
+                            color: hasContacts ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.textSecondary.withValues(alpha: 0.4),
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                          ),
+                        ),
+                      ),
+                    );
+                  }).toList(),
+                ),
+              ),
+            ),
+          ),
+        ],
       ),
-      title: Text(
-        contact.displayName,
-        style: const TextStyle(
-          color: LiquidGlassTheme.textPrimary,
-          fontSize: 16,
-          fontWeight: FontWeight.w500,
-        ),
-      ),
-      subtitle: contact.phoneNumbers.isNotEmpty
-          ? Text(
-              '${contact.primaryNumber} ${contact.phoneNumbers.length > 1 ? "• ${contact.phoneNumbers.length} numbers" : ""}',
-              style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 13),
-            )
-          : null,
-      trailing: IconButton(
-        icon: const Icon(Icons.phone_outlined, color: LiquidGlassTheme.gsmGreen, size: 22),
-        onPressed: () {
-          if (contact.phoneNumbers.isNotEmpty) {
-            RelayClient.instance.dialNumber(contact.primaryNumber);
-          }
-        },
-      ),
-      onTap: () => _openContactDetail(contact),
     );
   }
 }
@@ -204,10 +332,9 @@ class _ContactDetailSheet extends StatelessWidget {
           Container(
             width: 68,
             height: 68,
-            decoration: BoxDecoration(
-              color: const Color(0x35FFFFFF),
+            decoration: const BoxDecoration(
+              color: Color(0xFF7A8DBE),
               shape: BoxShape.circle,
-              border: Border.all(color: const Color(0x35FFFFFF), width: 1),
             ),
             alignment: Alignment.center,
             child: Text(
@@ -230,111 +357,35 @@ class _ContactDetailSheet extends StatelessWidget {
               borderRadius: 16,
               margin: const EdgeInsets.only(bottom: 12),
               padding: const EdgeInsets.all(14),
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
                 children: [
-                  Row(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
                     children: [
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.white12,
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          phone.label.toUpperCase(),
-                          style: const TextStyle(
-                            color: LiquidGlassTheme.textSecondary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
-                          ),
-                        ),
+                      Text(
+                        phone.label.toUpperCase(),
+                        style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
                       ),
-                      const SizedBox(width: 8),
+                      const SizedBox(height: 4),
                       Text(
                         phone.rawNumber,
-                        style: const TextStyle(
-                          color: LiquidGlassTheme.textPrimary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
-                        ),
+                        style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w500),
                       ),
                     ],
                   ),
-                  const SizedBox(height: 12),
-                  Row(
-                    children: [
-                      _buildMiniAction(
-                        icon: Icons.phone,
-                        label: 'Zong GSM',
-                        color: LiquidGlassTheme.gsmGreen,
-                        onTap: () {
-                          Navigator.pop(context);
-                          RelayClient.instance.dialNumber(phone.rawNumber);
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      _buildMiniAction(
-                        icon: Icons.phone_in_talk,
-                        label: 'WhatsApp',
-                        color: LiquidGlassTheme.whatsappGreen,
-                        onTap: () {
-                          Navigator.pop(context);
-                          WhatsAppLauncher.startAudioCall(phone.rawNumber);
-                        },
-                      ),
-                      const SizedBox(width: 8),
-                      _buildMiniAction(
-                        icon: Icons.chat,
-                        label: 'Chat',
-                        color: LiquidGlassTheme.whatsappGreen,
-                        onTap: () {
-                          Navigator.pop(context);
-                          WhatsAppLauncher.startChat(phone.rawNumber);
-                        },
-                      ),
-                    ],
+                  IconButton(
+                    icon: const Icon(Icons.phone, color: LiquidGlassTheme.gsmGreen, size: 24),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      RelayClient.instance.dialNumber(phone.rawNumber);
+                    },
                   ),
                 ],
               ),
             );
           }),
         ],
-      ),
-    );
-  }
-
-  Widget _buildMiniAction({
-    required IconData icon,
-    required String label,
-    required Color color,
-    required VoidCallback onTap,
-  }) {
-    return Expanded(
-      child: GestureDetector(
-        onTap: onTap,
-        child: Container(
-          padding: const EdgeInsets.symmetric(vertical: 8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.16),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.center,
-            children: [
-              Icon(icon, color: color, size: 16),
-              const SizedBox(width: 4),
-              Text(
-                label,
-                style: TextStyle(
-                  color: color,
-                  fontSize: 12,
-                  fontWeight: FontWeight.w600,
-                ),
-              ),
-            ],
-          ),
-        ),
       ),
     );
   }

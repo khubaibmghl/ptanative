@@ -1,4 +1,4 @@
-﻿import 'package:flutter/material.dart';
+import 'package:flutter/material.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../services/relay_server.dart';
 import '../services/telephony_monitor.dart';
@@ -237,7 +237,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
 
             const SizedBox(height: 8),
 
-            // 4. SYSTEM HEALTH CHIPS GRID
+            // 4. REAL SYSTEM HEALTH CHIPS GRID
             GridView.count(
               crossAxisCount: 2,
               shrinkWrap: true,
@@ -247,10 +247,18 @@ class _DashboardScreenState extends State<DashboardScreen> {
               mainAxisSpacing: 8,
               children: [
                 _buildStatusTile(
-                  icon: Icons.sim_card,
-                  title: 'SIM 1: Zong',
-                  subtitle: 'VoLTE HD Active',
+                  icon: Icons.wifi,
+                  title: 'Host Network IP',
+                  subtitle: widget.telemetry.localIp,
                   color: Colors.teal,
+                ),
+                _buildStatusTile(
+                  icon: Icons.devices,
+                  title: 'iPhone Clients',
+                  subtitle: widget.server.clientCount > 0
+                      ? '${widget.server.clientCount} Active'
+                      : '0 Connected',
+                  color: widget.server.clientCount > 0 ? Colors.green : Colors.grey,
                 ),
                 _buildStatusTile(
                   icon: Icons.adb,
@@ -263,12 +271,6 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   title: 'Vivo Battery',
                   subtitle: '${widget.telemetry.batteryLevel}% ${widget.telemetry.isCharging ? '(Charging)' : ''}',
                   color: Colors.blue,
-                ),
-                _buildStatusTile(
-                  icon: Icons.headphones,
-                  title: 'Audio Output',
-                  subtitle: 'AirPods Locked',
-                  color: Colors.purple,
                 ),
               ],
             ),
