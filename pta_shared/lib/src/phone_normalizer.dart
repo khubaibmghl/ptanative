@@ -1,4 +1,4 @@
-﻿class PhoneNumberNormalizer {
+class PhoneNumberNormalizer {
   /// Standardizes any phone number format (e.g. +92 300 1234567, 0300-1234567, 00923001234567)
   /// into the core 10-digit subscriber identifier (e.g. 3001234567).
   static String normalize(String? raw) {
@@ -18,6 +18,18 @@
       return '0${clean.substring(0, 3)} ${clean.substring(3)}';
     }
     return raw ?? '';
+  }
+
+  /// Formats a number into E.164 international format for CallKit CXHandle (+923001234567)
+  static String toE164(String? raw) {
+    final clean = normalize(raw);
+    if (clean.length == 10 && clean.startsWith('3')) {
+      return '+92$clean';
+    }
+    if (raw != null && raw.trim().startsWith('+')) {
+      return raw.trim().replaceAll(RegExp(r'\s+'), '');
+    }
+    return clean.isNotEmpty ? '+$clean' : (raw ?? '');
   }
 
   /// Checks if two different phone number strings refer to the exact same subscriber

@@ -111,16 +111,16 @@ class TelephonyMonitor {
       final res = await Process.run('/system/bin/dumpsys', ['telephony.registry']);
       final out = res.stdout.toString();
 
-      final callStates = RegExp(r'mCallState(?:\[\d+\])?\s*=\s*(\d+)').allMatches(out).map((m) => m.group(1)).toList();
-      final fgStates = RegExp(r'mForegroundCallState(?:\[\d+\])?\s*=\s*(\d+)').allMatches(out).map((m) => m.group(1)).toList();
-      final ringStates = RegExp(r'mRingingCallState(?:\[\d+\])?\s*=\s*(\d+)').allMatches(out).map((m) => m.group(1)).toList();
-      final incNums = RegExp(r'mCallIncomingNumber(?:\[\d+\])?\s*=\s*([0-9+]+)').allMatches(out).map((m) => m.group(1)).toList();
+      final callStates = RegExp(r'mCallState(?:\[\d+\])?\s*=\s*(\w+)').allMatches(out).map((m) => m.group(1) ?? '').toList();
+      final fgStates = RegExp(r'mForegroundCallState(?:\[\d+\])?\s*=\s*(\w+)').allMatches(out).map((m) => m.group(1) ?? '').toList();
+      final ringStates = RegExp(r'mRingingCallState(?:\[\d+\])?\s*=\s*(\w+)').allMatches(out).map((m) => m.group(1) ?? '').toList();
+      final incNums = RegExp(r'mCallIncomingNumber(?:\[\d+\])?\s*=\s*([0-9+]+)').allMatches(out).map((m) => m.group(1) ?? '').toList();
 
-      String incomingNum = incNums.isNotEmpty ? incNums.first! : '';
+      String incomingNum = incNums.isNotEmpty ? incNums.first : '';
 
-      bool isRinging = (ringStates.any((s) => s == '1' || s == '5' || s == '6')) || (callStates.any((s) => s == '1'));
-      bool isActive = fgStates.any((s) => s == '1');
-      bool isDialing = fgStates.any((s) => s == '3' || s == '4');
+      bool isRinging = (ringStates.any((s) => s == '1' || s == '5' || s == '6' || s.toUpperCase().contains('RINGING'))) || (callStates.any((s) => s == '1'));
+      bool isActive = fgStates.any((s) => s == '1' || s == '2' || s.toUpperCase().contains('ACTIVE'));
+      bool isDialing = fgStates.any((s) => s == '3' || s == '4' || s.toUpperCase().contains('DIALING') || s.toUpperCase().contains('ALERTING'));
 
       final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
 

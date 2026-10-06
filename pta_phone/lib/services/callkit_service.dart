@@ -31,19 +31,19 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
-      final cleanNumber = PhoneNumberNormalizer.normalize(handle);
+      final e164Number = PhoneNumberNormalizer.toE164(handle);
       final params = CallKitParams(
         id: validUuid,
-        nameCaller: callerName.isNotEmpty ? callerName : handle,
+        nameCaller: callerName.isNotEmpty ? callerName : (PhoneNumberNormalizer.formatForDisplay(handle).isNotEmpty ? PhoneNumberNormalizer.formatForDisplay(handle) : handle),
         appName: 'PTA Phone',
         avatar: '',
-        handle: cleanNumber.isNotEmpty ? cleanNumber : handle,
+        handle: e164Number.isNotEmpty ? e164Number : handle,
         type: 0, // Audio call
         duration: 35000,
         textAccept: 'Accept',
         textDecline: 'Decline',
         extra: <String, dynamic>{
-          'number': cleanNumber.isNotEmpty ? cleanNumber : handle,
+          'number': e164Number.isNotEmpty ? e164Number : handle,
           'name': callerName,
           'label': label,
         },
@@ -86,14 +86,14 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
-      final cleanNumber = PhoneNumberNormalizer.normalize(handle);
+      final e164Number = PhoneNumberNormalizer.toE164(handle);
       final params = CallKitParams(
         id: validUuid,
-        nameCaller: callerName.isNotEmpty ? callerName : handle,
+        nameCaller: callerName.isNotEmpty ? callerName : (PhoneNumberNormalizer.formatForDisplay(handle).isNotEmpty ? PhoneNumberNormalizer.formatForDisplay(handle) : handle),
         appName: 'PTA Phone',
-        handle: cleanNumber.isNotEmpty ? cleanNumber : handle,
+        handle: e164Number.isNotEmpty ? e164Number : handle,
         type: 0,
-        extra: <String, dynamic>{'number': cleanNumber.isNotEmpty ? cleanNumber : handle, 'name': callerName},
+        extra: <String, dynamic>{'number': e164Number.isNotEmpty ? e164Number : handle, 'name': callerName},
         ios: const IOSParams(
           iconName: 'AppIcon',
           handleType: 'phoneNumber',

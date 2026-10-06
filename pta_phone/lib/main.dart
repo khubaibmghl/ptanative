@@ -65,6 +65,18 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     super.initState();
     _setupCallKitListener();
     _checkInitialCallIntent();
+    _setupNativeIntentChannel();
+  }
+
+  void _setupNativeIntentChannel() {
+    const MethodChannel('com.pta.phone/native_intents').setMethodCallHandler((call) async {
+      if (call.method == 'onNativeDialIntent') {
+        final number = call.arguments['number']?.toString() ?? '';
+        if (number.isNotEmpty) {
+          RelayClient.instance.dialNumber(number);
+        }
+      }
+    });
   }
 
   Future<void> _checkInitialCallIntent() async {
