@@ -20,10 +20,14 @@ import Intents
     continue userActivity: NSUserActivity,
     restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
   ) -> Bool {
-    if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent,
+    if let intent = userActivity.interaction?.intent as? INStartCallIntent,
        let person = intent.contacts?.first,
        let handle = person.personHandle?.value {
-      nativeChannel?.invokeMethod("onNativeDialIntent", ["number": handle])
+      nativeChannel?.invokeMethod("onNativeDialIntent", arguments: ["number": handle])
+    } else if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent,
+              let person = intent.contacts?.first,
+              let handle = person.personHandle?.value {
+      nativeChannel?.invokeMethod("onNativeDialIntent", arguments: ["number": handle])
     }
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
   }
