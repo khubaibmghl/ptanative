@@ -3,6 +3,7 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'package:pta_shared/pta_shared.dart';
 
 /// Apple CallKit Bridge for iPhone 15 Pro
 class CallKitService {
@@ -30,18 +31,19 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      final cleanNumber = PhoneNumberNormalizer.normalize(handle);
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
         appName: 'PTA Phone',
         avatar: '',
-        handle: label != null && label.isNotEmpty ? '$handle ($label)' : handle,
+        handle: cleanNumber.isNotEmpty ? cleanNumber : handle,
         type: 0, // Audio call
         duration: 35000,
         textAccept: 'Accept',
         textDecline: 'Decline',
         extra: <String, dynamic>{
-          'number': handle,
+          'number': cleanNumber.isNotEmpty ? cleanNumber : handle,
           'name': callerName,
           'label': label,
         },
@@ -84,13 +86,14 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      final cleanNumber = PhoneNumberNormalizer.normalize(handle);
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
         appName: 'PTA Phone',
-        handle: handle,
+        handle: cleanNumber.isNotEmpty ? cleanNumber : handle,
         type: 0,
-        extra: <String, dynamic>{'number': handle, 'name': callerName},
+        extra: <String, dynamic>{'number': cleanNumber.isNotEmpty ? cleanNumber : handle, 'name': callerName},
         ios: const IOSParams(
           iconName: 'AppIcon',
           handleType: 'phoneNumber',

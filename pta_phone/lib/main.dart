@@ -1,6 +1,7 @@
 import 'dart:ui';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:pta_shared/pta_shared.dart';
 import 'services/callkit_service.dart';
@@ -63,6 +64,27 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   void initState() {
     super.initState();
     _setupCallKitListener();
+    _checkInitialCallIntent();
+  }
+
+  Future<void> _checkInitialCallIntent() async {
+    try {
+      final calls = await FlutterCallkitIncoming.activeCalls();
+      if (calls is List && calls.isNotEmpty) {
+        for (final call in calls) {
+          if (call is Map) {
+            final bodyMap = Map<String, dynamic>.from(call);
+            final number = bodyMap['handle']?.toString() ??
+                           bodyMap['number']?.toString() ??
+                           bodyMap['extra']?['number']?.toString() ?? '';
+            if (number.isNotEmpty) {
+              RelayClient.instance.dialNumber(number);
+              break;
+            }
+          }
+        }
+      }
+    } catch (_) {}
   }
 
   void _setupCallKitListener() {
@@ -70,7 +92,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
       if (event == null) return;
       switch (event.event) {
         case Event.actionCallStart:
-          final number = event.body['handle'] as String? ?? event.body['number'] as String? ?? '';
+          String number = '';
+          if (event.body is Map) {
+            final bodyMap = Map<String, dynamic>.from(event.body as Map);
+            number = bodyMap['handle']?.toString() ??
+                     bodyMap['number']?.toString() ??
+                     bodyMap['extra']?['number']?.toString() ?? '';
+          }
           if (number.isNotEmpty) {
             RelayClient.instance.dialNumber(number);
           }
