@@ -196,7 +196,7 @@ class _ContactsScreenState extends State<ContactsScreen> {
                       ..._alphabetKeys.map((letter) {
                         final contactsInGroup = _groupedContacts[letter] ?? [];
                         return SliverMainAxisGroup(
-                          headers: [
+                          slivers: [
                             SliverToBoxAdapter(
                               child: Container(
                                 padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 4),
@@ -210,8 +210,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
                                 ),
                               ),
                             ),
-                          ],
-                          slivers: [
                             SliverList(
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {

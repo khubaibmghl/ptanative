@@ -96,17 +96,19 @@ class _KeypadScreenState extends State<KeypadScreen> {
         const SizedBox(height: 12),
 
         // Header Top Right Add Contact Icon Button
-        Align(
-          alignment: Alignment.centerRight,
+        Padding(
           padding: const EdgeInsets.only(right: 24, top: 8),
-          child: Container(
-            width: 38,
-            height: 38,
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white12 : const Color(0xFFF0F0F5),
-              shape: BoxShape.circle,
+          child: Align(
+            alignment: Alignment.centerRight,
+            child: Container(
+              width: 38,
+              height: 38,
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white12 : const Color(0xFFF0F0F5),
+                shape: BoxShape.circle,
+              ),
+              child: const Icon(Icons.person_add_outlined, color: LiquidGlassTheme.textPrimary, size: 20),
             ),
-            child: const Icon(Icons.person_add_outlined, color: LiquidGlassTheme.textPrimary, size: 20),
           ),
         ),
 
