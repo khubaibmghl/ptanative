@@ -96,7 +96,7 @@ jobs:
       - name: Build Android Release APK
         run: |
           cd pta_host
-          flutter build apk --release -Pandroid-skip-build-dependency-validation=true
+          flutter build apk --release --android-skip-build-dependency-validation
 
       - name: Rename & Prepare APK
         run: |
