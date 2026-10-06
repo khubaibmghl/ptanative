@@ -450,6 +450,14 @@ class RelayClient {
     );
     _activeCallController.add(currentActiveCall);
 
+    try {
+      await CallKitService.instance.startCall(
+        callId: CallKitService.generateUuid(),
+        callerName: contact?.displayName ?? clean,
+        handle: clean,
+      );
+    } catch (_) {}
+
     if (_isConnected && _channel != null) {
       try {
         _channel!.sink.add(RelayMessage.actionDial(clean).toJsonString());

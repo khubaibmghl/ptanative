@@ -55,7 +55,7 @@ class CallKitService {
         ),
         ios: const IOSParams(
           iconName: 'AppIcon',
-          handleType: 'generic',
+          handleType: 'phoneNumber',
           supportsVideo: false,
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
@@ -74,6 +74,35 @@ class CallKitService {
       await FlutterCallkitIncoming.showCallkitIncoming(params);
     } catch (e) {
       debugPrint('[CALLKIT] Exception during showCallkitIncoming: $e');
+    }
+  }
+
+  Future<void> startCall({
+    required String callId,
+    required String callerName,
+    required String handle,
+  }) async {
+    try {
+      final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      final params = CallKitParams(
+        id: validUuid,
+        nameCaller: callerName.isNotEmpty ? callerName : handle,
+        appName: 'PTA Phone',
+        handle: handle,
+        type: 0,
+        extra: <String, dynamic>{'number': handle, 'name': callerName},
+        ios: const IOSParams(
+          iconName: 'AppIcon',
+          handleType: 'phoneNumber',
+          supportsVideo: false,
+          maximumCallGroups: 1,
+          maximumCallsPerCallGroup: 1,
+          audioSessionMode: 'voiceChat',
+        ),
+      );
+      await FlutterCallkitIncoming.startCall(params);
+    } catch (e) {
+      debugPrint('[CALLKIT] Exception during startCall: $e');
     }
   }
 

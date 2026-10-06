@@ -69,6 +69,12 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
     CallKitService.instance.onEvent?.listen((event) {
       if (event == null) return;
       switch (event.event) {
+        case Event.actionCallStart:
+          final number = event.body['handle'] as String? ?? event.body['number'] as String? ?? '';
+          if (number.isNotEmpty) {
+            RelayClient.instance.dialNumber(number);
+          }
+          break;
         case Event.actionCallAccept:
           RelayClient.instance.answerCall();
           break;
