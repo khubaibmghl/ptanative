@@ -13,7 +13,6 @@ class ContactsScreen extends StatefulWidget {
 }
 
 class _ContactsScreenState extends State<ContactsScreen> {
-  List<ContactModel> _contacts = [];
   Map<String, List<ContactModel>> _groupedContacts = {};
   List<String> _alphabetKeys = [];
   bool _isLoading = true;
@@ -47,7 +46,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
     if (mounted) {
       setState(() {
-        _contacts = list;
         _groupedContacts = grouped;
         _alphabetKeys = keys;
         _isLoading = false;

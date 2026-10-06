@@ -32,7 +32,9 @@ jobs:
           cache: true
 
       - name: Verify Flutter
-        run: flutter --version
+        run: |
+          flutter --version
+          flutter config --no-enable-swift-package-manager
 
       - name: Install pta_shared Dependencies
         run: |
@@ -47,7 +49,7 @@ jobs:
       - name: Build Unsigned iOS Runner.app & Package IPA
         run: |
           cd pta_phone
-          flutter build ios --release --no-codesign --config-only
+          flutter build ios --release --no-codesign --no-pub --config-only
           cd ios
           pod install
           xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO clean build

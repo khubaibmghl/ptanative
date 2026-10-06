@@ -1,9 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
-import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
-import '../services/whatsapp_launcher.dart';
 import '../theme/liquid_glass_theme.dart';
 
 class KeypadScreen extends StatefulWidget {

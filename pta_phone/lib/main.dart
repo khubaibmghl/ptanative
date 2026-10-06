@@ -6,12 +6,10 @@ import 'package:pta_shared/pta_shared.dart';
 import 'services/callkit_service.dart';
 import 'services/relay_client.dart';
 import 'theme/liquid_glass_theme.dart';
-import 'widgets/active_call_bar.dart';
 import 'screens/keypad_screen.dart';
 import 'screens/recents_screen.dart';
 import 'screens/contacts_screen.dart';
 import 'screens/settings_screen.dart';
-import 'screens/dtmf_sheet.dart';
 import 'screens/in_call_screen.dart';
 
 void main() async {
@@ -274,54 +272,6 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
                 index: 3,
               ),
             ],
-          ),
-        ),
-      ),
-    );
-  }
-
-  Widget _buildFloatingSearchButton() {
-    final isDark = LiquidGlassTheme.isDarkMode;
-
-    return GestureDetector(
-      onTap: () {
-        HapticFeedback.lightImpact();
-        setState(() {
-          _currentIndex = 1; // Open Contacts/Search
-        });
-      },
-      child: ClipRRect(
-        borderRadius: BorderRadius.circular(32),
-        child: BackdropFilter(
-          filter: ImageFilter.blur(
-            sigmaX: LiquidGlassTheme.glassBlurSigma,
-            sigmaY: LiquidGlassTheme.glassBlurSigma,
-          ),
-          child: Container(
-            width: 64,
-            height: 64,
-            decoration: BoxDecoration(
-              color: isDark ? const Color(0x351C1C26) : const Color(0xEBFAFBFE),
-              shape: BoxShape.circle,
-              border: Border.all(
-                color: isDark ? const Color(0x35FFFFFF) : const Color(0x1F000000),
-                width: 0.5,
-              ),
-              boxShadow: isDark
-                  ? null
-                  : [
-                      BoxShadow(
-                        color: Colors.black.withValues(alpha: 0.08),
-                        blurRadius: 16,
-                        offset: const Offset(0, 6),
-                      ),
-                    ],
-            ),
-            child: Icon(
-              Icons.search,
-              color: isDark ? Colors.white : Colors.black,
-              size: 24,
-            ),
           ),
         ),
       ),
