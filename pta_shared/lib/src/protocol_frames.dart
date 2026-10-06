@@ -161,4 +161,25 @@ class RelayMessage {
       },
     );
   }
+
+  static RelayMessage webrtcOffer(String sdp) {
+    return RelayMessage(
+      type: 'WEBRTC_OFFER',
+      data: {'sdp': sdp},
+    );
+  }
+
+  static RelayMessage webrtcAnswer(String sdp) {
+    return RelayMessage(
+      type: 'WEBRTC_ANSWER',
+      data: {'sdp': sdp},
+    );
+  }
+
+  static RelayMessage webrtcIceCandidate(Map<String, dynamic> candidate) {
+    return RelayMessage(
+      type: 'WEBRTC_ICE_CANDIDATE',
+      data: candidate,
+    );
+  }
 }

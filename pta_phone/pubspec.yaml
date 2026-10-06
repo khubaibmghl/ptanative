@@ -1,4 +1,4 @@
-﻿name: pta_phone
+name: pta_phone
 description: "PTA Phone iOS Liquid Glass Client for iPhone 15 Pro"
 publish_to: 'none'
 version: 1.0.0+1
@@ -15,6 +15,7 @@ dependencies:
   sqflite: ^2.3.3+1
   path: ^1.9.0
   flutter_callkit_incoming: ^2.0.4
+  flutter_webrtc: ^0.12.4
   url_launcher: ^6.3.0
   shared_preferences: ^2.2.3
   pta_shared:

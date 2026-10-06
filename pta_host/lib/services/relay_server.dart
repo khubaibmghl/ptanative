@@ -19,6 +19,7 @@ class RelayServer {
   RawDatagramSocket? _udpSocket;
   final TelephonyController telephonyController;
   AndroidContentService? contentService;
+  final voiceTunnel = VoiceTunnelService();
 
   final List<WebSocketChannel> _connectedSockets = [];
   final List<ActivityLog> activityLogs = [];
@@ -296,6 +297,11 @@ class RelayServer {
           final digit = msg.data['digit']?.toString() ?? '';
           logEvent('DTMF Keypress', 'Transmitted digit $digit', ActivityType.info);
           telephonyController.sendDtmf(digit);
+          break;
+        case 'WEBRTC_OFFER':
+        case 'WEBRTC_ANSWER':
+        case 'WEBRTC_ICE_CANDIDATE':
+          voiceTunnel.handleSignalingMessage(msg);
           break;
         default:
           break;

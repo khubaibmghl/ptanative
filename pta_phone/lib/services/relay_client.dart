@@ -61,6 +61,7 @@ class RelayClient {
 
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
+  final voiceTunnel = VoiceTunnelService();
 
   String cloudRelayUrl = '';
   String pairingKey = 'pta_native_default';
@@ -411,12 +412,25 @@ class RelayClient {
             isIncoming: currentActiveCall?.isIncoming ?? false,
             state: isAnswered && startTimeMs > 0 ? PhoneCallState.connected : PhoneCallState.dialing,
           );
+          if (isAnswered && startTimeMs > 0) {
+            voiceTunnel.startVoiceTunnel(
+              isCaller: false,
+              sendSignaling: (msg) {
+                if (_channel != null) {
+                  _channel!.sink.add(msg.toJsonString());
+                }
+              },
+            );
+          }
           _activeCallController.add(currentActiveCall);
           break;
 
         case 'CALL_DISCONNECTED':
           final number = msg.data['number'] as String? ?? (currentActiveCall?.number ?? 'Unknown');
           final duration = msg.data['duration'] as int? ?? 0;
+
+          // Close WebRTC voice tunnel
+          await voiceTunnel.closeVoiceTunnel();
 
           // End native Apple CallKit
           await CallKitService.instance.endAllCalls();
@@ -440,6 +454,12 @@ class RelayClient {
 
           currentActiveCall = null;
           _activeCallController.add(null);
+          break;
+
+        case 'WEBRTC_OFFER':
+        case 'WEBRTC_ANSWER':
+        case 'WEBRTC_ICE_CANDIDATE':
+          await voiceTunnel.handleSignalingMessage(msg);
           break;
 
         case 'CONTACTS_LIST':
