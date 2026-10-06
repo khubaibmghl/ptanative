@@ -52,9 +52,11 @@ jobs:
           flutter build ios --release --no-codesign --no-pub --config-only
           cd ios
           pod install
-          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO clean build
+          xcodebuild -workspace Runner.xcworkspace -scheme Runner -configuration Release -sdk iphoneos -derivedDataPath build CODE_SIGNING_ALLOWED=NO CODE_SIGN_IDENTITY="" CODE_SIGNING_REQUIRED=NO clean build
           mkdir -p ../build/ios/iphoneos/Payload
-          cp -r build/Release-iphoneos/Runner.app ../build/ios/iphoneos/Payload/
+          RUNNER_APP=$(find build ~/Library/Developer/Xcode/DerivedData -name "Runner.app" -type d 2>/dev/null | head -n 1)
+          echo "Found Runner.app at: $RUNNER_APP"
+          cp -r "$RUNNER_APP" ../build/ios/iphoneos/Payload/
           cd ../build/ios/iphoneos
           zip -r -9 PTA_Phone_iOS_LiquidGlass.ipa Payload
           ls -lh PTA_Phone_iOS_LiquidGlass.ipa
