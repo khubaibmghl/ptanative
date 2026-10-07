@@ -380,11 +380,13 @@ class RelayClient {
               } else if (isConnected) {
                 final dur = msg.data['duration_seconds'] as int? ?? 0;
                 final startMs = DateTime.now().millisecondsSinceEpoch - (dur * 1000);
+                final contact = await DatabaseHelper.instance.findContactByNumber(number);
                 currentActiveCall = ActiveCallInfo(
-                  number: number.isNotEmpty ? number : 'Cellular Call',
-                  callerName: '',
+                  number: number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call'),
+                  callerName: contact?.displayName ?? (currentActiveCall?.callerName ?? ''),
+                  label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
                   startTime: startMs,
-                  isIncoming: false,
+                  isIncoming: currentActiveCall?.isIncoming ?? false,
                   state: PhoneCallState.connected,
                 );
                 _activeCallController.add(currentActiveCall);
