@@ -81,6 +81,7 @@ class TelephonyMonitor {
           number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
           startTime: _talkStartTime,
         ));
+        server.startVoiceTunnel();
       }
     } else if (state == 'OFFHOOK' || state == 'DIALING') {
       if (_lastPhase != 'ACTIVE' && _lastPhase != 'DIALING') {
@@ -99,6 +100,7 @@ class TelephonyMonitor {
           number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
           duration: dur,
         ));
+        server.stopVoiceTunnel();
         _lastPhase = 'IDLE';
         _activeNumber = '';
         _talkStartTime = 0;
@@ -136,6 +138,7 @@ class TelephonyMonitor {
             number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
             startTime: _talkStartTime,
           ));
+          server.startVoiceTunnel();
         }
 
         final dur = now - _talkStartTime;
@@ -218,6 +221,7 @@ class TelephonyMonitor {
               number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
               duration: dur,
             ));
+            server.stopVoiceTunnel();
             _callLogged = true;
           }
 

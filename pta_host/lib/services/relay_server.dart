@@ -55,9 +55,22 @@ class RelayServer {
     debugPrint('[ACTIVITY] ${entry.timeFormatted} | $title - $subtitle');
   }
 
-  Timer? _idleTimer;
-  int _lastDisconnectTime = 0;
   bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
+
+  void startVoiceTunnel() {
+    logEvent('Starting Voice Tunnel', 'Initiating WebRTC Audio Stream with iPhone', ActivityType.info);
+    voiceTunnel.startVoiceTunnel(
+      isCaller: true,
+      sendSignaling: (msg) {
+        broadcast(msg);
+      },
+    );
+  }
+
+  void stopVoiceTunnel() {
+    logEvent('Stopping Voice Tunnel', 'Closing WebRTC Audio Stream', ActivityType.info);
+    voiceTunnel.closeVoiceTunnel();
+  }
 
   /// Starts the embedded HTTP & WebSocket server on 0.0.0.0:8080 and UDP discovery on 8081
   Future<bool> startServer() async {
