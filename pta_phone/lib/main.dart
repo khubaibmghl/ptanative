@@ -50,7 +50,7 @@ class MainNavigationScreen extends StatefulWidget {
   State<MainNavigationScreen> createState() => _MainNavigationScreenState();
 }
 
-class _MainNavigationScreenState extends State<MainNavigationScreen> {
+class _MainNavigationScreenState extends State<MainNavigationScreen> with WidgetsBindingObserver {
   int _currentIndex = 2; // Keypad active by default
 
   final List<Widget> _screens = const [
@@ -63,9 +63,25 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> {
   @override
   void initState() {
     super.initState();
+    WidgetsBinding.instance.addObserver(this);
     _setupCallKitListener();
     _checkInitialCallIntent();
     _setupNativeIntentChannel();
+  }
+
+  @override
+  void dispose() {
+    WidgetsBinding.instance.removeObserver(this);
+    super.dispose();
+  }
+
+  @override
+  void didChangeAppLifecycleState(AppLifecycleState state) {
+    if (state == AppLifecycleState.resumed) {
+      RelayClient.instance.onAppResumed();
+    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+      RelayClient.instance.onAppPaused();
+    }
   }
 
   void _setupNativeIntentChannel() {

@@ -216,8 +216,6 @@ class RelayClient {
         _onDisconnected();
       }
     }
-  }
-
   void _connectCloudFallback() {
     if (_isConnected) return;
 
@@ -294,11 +292,33 @@ class RelayClient {
     });
   }
 
+  void onAppResumed() {
+    logDiagnostic('App Resumed from screen lock/background');
+    _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+    if (!_isConnected || _channel == null) {
+      logDiagnostic('Instant wake reconnect starting...');
+      discoverHostIp().then((_) {
+        connect();
+      });
+    } else {
+      try {
+        _channel!.sink.add(RelayMessage.ping().toJsonString());
+      } catch (_) {
+        _onDisconnected();
+        connect();
+      }
+    }
+  }
+
+  void onAppPaused() {
+    logDiagnostic('App entered background/screen locked');
+    _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+  }
+
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
       if (!_isConnected) {
-        // Attempt UDP discovery on reconnect if lost
         final discoveredIp = await discoverHostIp();
         if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
           hostIp = discoveredIp;

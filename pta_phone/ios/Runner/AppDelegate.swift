@@ -42,6 +42,24 @@ import Intents
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
   }
 
+  private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+
+  override func applicationDidEnterBackground(_ application: UIApplication) {
+    super.applicationDidEnterBackground(application)
+    backgroundTask = application.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") {
+      application.endBackgroundTask(self.backgroundTask)
+      self.backgroundTask = .invalid
+    }
+  }
+
+  override func applicationWillEnterForeground(_ application: UIApplication) {
+    super.applicationWillEnterForeground(application)
+    if backgroundTask != .invalid {
+      application.endBackgroundTask(backgroundTask)
+      backgroundTask = .invalid
+    }
+  }
+
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {
     GeneratedPluginRegistrant.register(with: engineBridge.pluginRegistry)
   }
