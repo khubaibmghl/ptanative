@@ -59,13 +59,18 @@ class VoiceTunnelService {
       _peerConnection!.onTrack = (event) {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
-          debugPrint('[VOICE_TUNNEL] Remote audio track received!');
+          event.track.enabled = true;
+          try {
+            Helper.selectAudioOutput('earpiece');
+          } catch (_) {}
+          debugPrint('[VOICE_TUNNEL] Remote audio track received and enabled!');
         }
       };
 
       // Capture local audio
       _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': _audioConstraints, 'video': false});
       for (final track in _localAudioStream!.getAudioTracks()) {
+        track.enabled = true;
         await _peerConnection!.addTrack(track, _localAudioStream!);
       }
 

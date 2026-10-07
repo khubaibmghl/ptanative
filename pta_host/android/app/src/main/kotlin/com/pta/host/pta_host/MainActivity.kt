@@ -183,9 +183,11 @@ class MainActivity : FlutterActivity() {
             val audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
             if (enable) {
                 audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                audioManager.isSpeakerphoneOn = true
                 audioManager.isMicrophoneMute = false
             } else {
                 audioManager.mode = android.media.AudioManager.MODE_NORMAL
+                audioManager.isSpeakerphoneOn = false
             }
         } catch (e: Exception) {
             e.printStackTrace()
