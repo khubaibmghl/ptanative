@@ -28,17 +28,21 @@ class _InCallScreenState extends State<InCallScreen> {
   @override
   void didUpdateWidget(covariant InCallScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.callInfo.state != oldWidget.callInfo.state || widget.callInfo.startTime != oldWidget.callInfo.startTime) {
+    if (widget.callInfo.state != oldWidget.callInfo.state) {
       _startTimerIfNeeded();
     }
   }
 
   void _startTimerIfNeeded() {
     _timer?.cancel();
-    if (widget.callInfo.state == PhoneCallState.connected && widget.callInfo.startTime > 0) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      _elapsedSeconds = (now - widget.callInfo.startTime) ~/ 1000;
-      if (_elapsedSeconds < 0) _elapsedSeconds = 0;
+    if (widget.callInfo.state == PhoneCallState.connected) {
+      if (widget.callInfo.startTime > 0) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final computed = (now - widget.callInfo.startTime) ~/ 1000;
+        _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : 0;
+      } else {
+        _elapsedSeconds = 0;
+      }
 
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {

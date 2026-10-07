@@ -85,14 +85,25 @@ class VoiceTunnelService {
     }
   }
 
+  final List<RTCIceCandidate> _pendingCandidates = [];
+
   /// Process incoming WebRTC signaling message
   Future<void> handleSignalingMessage(RelayMessage msg) async {
     try {
       if (msg.type == 'WEBRTC_OFFER') {
         final sdp = msg.data['sdp'] as String? ?? '';
-        if (sdp.isNotEmpty && _peerConnection != null) {
+        if (sdp.isNotEmpty) {
+          if (_peerConnection == null) {
+            await startVoiceTunnel(isCaller: false, sendSignaling: onSendSignaling ?? (_) {});
+          }
           final description = RTCSessionDescription(sdp, 'offer');
           await _peerConnection!.setRemoteDescription(description);
+
+          // Drain queued candidates
+          for (final cand in _pendingCandidates) {
+            await _peerConnection!.addCandidate(cand);
+          }
+          _pendingCandidates.clear();
 
           final answer = await _peerConnection!.createAnswer({
             'mandatory': {
@@ -109,15 +120,25 @@ class VoiceTunnelService {
         if (sdp.isNotEmpty && _peerConnection != null) {
           final description = RTCSessionDescription(sdp, 'answer');
           await _peerConnection!.setRemoteDescription(description);
+
+          // Drain queued candidates
+          for (final cand in _pendingCandidates) {
+            await _peerConnection!.addCandidate(cand);
+          }
+          _pendingCandidates.clear();
         }
       } else if (msg.type == 'WEBRTC_ICE_CANDIDATE') {
-        if (_peerConnection != null) {
-          final candidate = RTCIceCandidate(
-            msg.data['candidate'] as String?,
-            msg.data['sdpMid'] as String?,
-            msg.data['sdpMLineIndex'] as int?,
-          );
+        final candidate = RTCIceCandidate(
+          msg.data['candidate'] as String?,
+          msg.data['sdpMid'] as String?,
+          msg.data['sdpMLineIndex'] as int?,
+        );
+        if (_peerConnection != null && _peerConnection!.signalingState != RTCSignalingState.RTCSignalingStateStable) {
+          _pendingCandidates.add(candidate);
+        } else if (_peerConnection != null) {
           await _peerConnection!.addCandidate(candidate);
+        } else {
+          _pendingCandidates.add(candidate);
         }
       }
     } catch (e) {

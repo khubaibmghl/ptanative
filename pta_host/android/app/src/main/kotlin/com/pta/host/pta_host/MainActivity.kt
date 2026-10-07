@@ -45,6 +45,11 @@ class MainActivity : FlutterActivity() {
                     stopForegroundServiceNative()
                     result.success(true)
                 }
+                "enableAudioRouting" -> {
+                    val enable = call.argument<Boolean>("enable") ?: false
+                    enableCallAudioRouting(enable)
+                    result.success(true)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -170,6 +175,20 @@ class MainActivity : FlutterActivity() {
         } catch (e: Exception) {
             e.printStackTrace()
             false
+        }
+    }
+
+    private fun enableCallAudioRouting(enable: Boolean) {
+        try {
+            val audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            if (enable) {
+                audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                audioManager.isMicrophoneMute = false
+            } else {
+                audioManager.mode = android.media.AudioManager.MODE_NORMAL
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
         }
     }
 }

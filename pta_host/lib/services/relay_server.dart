@@ -57,10 +57,14 @@ class RelayServer {
 
   Timer? _idleTimer;
   int _lastDisconnectTime = 0;
-  bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
+  static const _telephonyChannel = MethodChannel('com.pta.host/telephony_methods');
 
   void startVoiceTunnel() {
     logEvent('Starting Voice Tunnel', 'Initiating WebRTC Audio Stream with iPhone', ActivityType.info);
+    try {
+      _telephonyChannel.invokeMethod('enableAudioRouting', {'enable': true});
+    } catch (_) {}
+
     voiceTunnel.startVoiceTunnel(
       isCaller: true,
       sendSignaling: (msg) {
@@ -71,6 +75,10 @@ class RelayServer {
 
   void stopVoiceTunnel() {
     logEvent('Stopping Voice Tunnel', 'Closing WebRTC Audio Stream', ActivityType.info);
+    try {
+      _telephonyChannel.invokeMethod('enableAudioRouting', {'enable': false});
+    } catch (_) {}
+
     voiceTunnel.closeVoiceTunnel();
   }
 

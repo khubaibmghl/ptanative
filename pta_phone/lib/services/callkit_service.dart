@@ -31,19 +31,18 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
-      final e164Number = PhoneNumberNormalizer.toE164(handle);
       final params = CallKitParams(
         id: validUuid,
-        nameCaller: callerName.isNotEmpty ? callerName : (PhoneNumberNormalizer.formatForDisplay(handle).isNotEmpty ? PhoneNumberNormalizer.formatForDisplay(handle) : handle),
+        nameCaller: callerName.isNotEmpty ? callerName : handle,
         appName: 'PTA Phone',
         avatar: '',
-        handle: e164Number.isNotEmpty ? e164Number : handle,
+        handle: handle,
         type: 0, // Audio call
         duration: 35000,
         textAccept: 'Accept',
         textDecline: 'Decline',
         extra: <String, dynamic>{
-          'number': e164Number.isNotEmpty ? e164Number : handle,
+          'number': handle,
           'name': callerName,
           'label': label,
         },
@@ -86,14 +85,13 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
-      final e164Number = PhoneNumberNormalizer.toE164(handle);
       final params = CallKitParams(
         id: validUuid,
-        nameCaller: callerName.isNotEmpty ? callerName : (PhoneNumberNormalizer.formatForDisplay(handle).isNotEmpty ? PhoneNumberNormalizer.formatForDisplay(handle) : handle),
+        nameCaller: callerName.isNotEmpty ? callerName : handle,
         appName: 'PTA Phone',
-        handle: e164Number.isNotEmpty ? e164Number : handle,
+        handle: handle,
         type: 0,
-        extra: <String, dynamic>{'number': e164Number.isNotEmpty ? e164Number : handle, 'name': callerName},
+        extra: <String, dynamic>{'number': handle, 'name': callerName},
         ios: const IOSParams(
           iconName: 'AppIcon',
           handleType: 'phoneNumber',
