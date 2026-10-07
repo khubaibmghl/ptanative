@@ -55,6 +55,8 @@ class RelayServer {
     debugPrint('[ACTIVITY] ${entry.timeFormatted} | $title - $subtitle');
   }
 
+  Timer? _idleTimer;
+  int _lastDisconnectTime = 0;
   bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
 
   void startVoiceTunnel() {
