@@ -57,6 +57,7 @@ class RelayServer {
 
   Timer? _idleTimer;
   int _lastDisconnectTime = 0;
+  bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
   static const _telephonyChannel = MethodChannel('com.pta.host/telephony_methods');
 
   void startVoiceTunnel() {
