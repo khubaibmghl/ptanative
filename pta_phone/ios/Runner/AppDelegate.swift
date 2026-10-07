@@ -1,16 +1,64 @@
 import Flutter
 import UIKit
 import Intents
+import AVFoundation
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var nativeChannel: FlutterMethodChannel?
+  private var silentAudioPlayer: AVAudioPlayer?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    startSilentAudioKeepAlive()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func startSilentAudioKeepAlive() {
+    do {
+      let audioSession = AVAudioSession.sharedInstance()
+      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try audioSession.setActive(true)
+
+      let silentWavData = createSilentWavData()
+      silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
+      silentAudioPlayer?.numberOfLoops = -1
+      silentAudioPlayer?.volume = 0.01
+      silentAudioPlayer?.play()
+    } catch {
+      print("[AppDelegate] Audio Keep-Alive Exception: \(error)")
+    }
+  }
+
+  private func createSilentWavData() -> Data {
+    let sampleRate: UInt32 = 44100
+    let numChannels: UInt16 = 1
+    let bitsPerSample: UInt16 = 16
+    let byteRate: UInt32 = sampleRate * UInt32(numChannels) * UInt32(bitsPerSample / 8)
+    let blockAlign: UInt16 = numChannels * (bitsPerSample / 8)
+    let numSamples: UInt32 = sampleRate * 2
+    let dataSize: UInt32 = numSamples * UInt32(blockAlign)
+    let chunkSize: UInt32 = 36 + dataSize
+
+    var header = Data()
+    header.append(contentsOf: "RIFF".utf8)
+    header.append(contentsOf: withUnsafeBytes(of: chunkSize.littleEndian) { Data($0) })
+    header.append(contentsOf: "WAVE".utf8)
+    header.append(contentsOf: "fmt ".utf8)
+    header.append(contentsOf: withUnsafeBytes(of: UInt32(16).littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: UInt16(1).littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: numChannels.littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: sampleRate.littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: byteRate.littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: blockAlign.littleEndian) { Data($0) })
+    header.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
+    header.append(contentsOf: "data".utf8)
+    header.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
+    header.append(Data(count: Int(dataSize)))
+
+    return header
   }
 
   private func getNativeChannel() -> FlutterMethodChannel? {
