@@ -216,6 +216,8 @@ class RelayClient {
         _onDisconnected();
       }
     }
+  }
+
   void _connectCloudFallback() {
     if (_isConnected) return;
 
