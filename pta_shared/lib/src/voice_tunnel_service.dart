@@ -4,6 +4,7 @@ import 'package:flutter_webrtc/flutter_webrtc.dart';
 import 'protocol_frames.dart';
 
 typedef SendSignalingCallback = void Function(RelayMessage msg);
+typedef DiagnosticLogCallback = void Function(String message);
 
 class VoiceTunnelService {
   RTCPeerConnection? _peerConnection;
@@ -11,7 +12,14 @@ class VoiceTunnelService {
   MediaStream? _remoteAudioStream;
   StreamSubscription? _signalingSub;
   SendSignalingCallback? onSendSignaling;
+  DiagnosticLogCallback? onLog;
+  Timer? _statsTimer;
   bool isConnected = false;
+
+  void _log(String msg) {
+    debugPrint('[VOICE_TUNNEL] $msg');
+    onLog?.call(msg);
+  }
 
   final Map<String, dynamic> _rtcConfiguration = {
     'iceServers': [
@@ -32,27 +40,46 @@ class VoiceTunnelService {
   };
 
   /// Initialize and start low-latency WebRTC peer connection
-  Future<void> startVoiceTunnel({required bool isCaller, required SendSignalingCallback sendSignaling}) async {
+  Future<void> startVoiceTunnel({
+    required bool isCaller,
+    required SendSignalingCallback sendSignaling,
+    DiagnosticLogCallback? logCallback,
+  }) async {
     onSendSignaling = sendSignaling;
+    if (logCallback != null) onLog = logCallback;
+
+    _log('Initializing Voice Tunnel (isCaller=$isCaller)...');
     await closeVoiceTunnel();
 
     try {
       _peerConnection = await createPeerConnection(_rtcConfiguration);
+      _log('PeerConnection created successfully');
 
       _peerConnection!.onIceCandidate = (candidate) {
         if (candidate.candidate != null) {
+          _log('Local ICE candidate gathered: ${candidate.sdpMid}:${candidate.sdpMLineIndex}');
           onSendSignaling?.call(RelayMessage.webrtcIceCandidate(candidate.toMap()));
         }
       };
 
+      _peerConnection!.onIceGatheringState = (state) {
+        _log('ICE Gathering State changed -> ${state.name}');
+      };
+
+      _peerConnection!.onSignalingState = (state) {
+        _log('Signaling State changed -> ${state.name}');
+      };
+
       _peerConnection!.onConnectionState = (state) {
-        debugPrint('[VOICE_TUNNEL] PeerConnection State: $state');
+        _log('PeerConnection State changed -> ${state.name}');
         if (state == RTCPeerConnectionState.RTCPeerConnectionStateConnected) {
           isConnected = true;
+          _startStatsMonitoring();
         } else if (state == RTCPeerConnectionState.RTCPeerConnectionStateDisconnected ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateFailed ||
             state == RTCPeerConnectionState.RTCPeerConnectionStateClosed) {
           isConnected = false;
+          _statsTimer?.cancel();
         }
       };
 
@@ -60,21 +87,29 @@ class VoiceTunnelService {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
           event.track.enabled = true;
+          _log('Remote audio track received! ID=${event.track.id}, enabled=${event.track.enabled}, readyState=${event.track.readyState}');
           try {
             Helper.selectAudioOutput('earpiece');
-          } catch (_) {}
-          debugPrint('[VOICE_TUNNEL] Remote audio track received and enabled!');
+            _log('Audio output routed to earpiece successfully');
+          } catch (e) {
+            _log('Audio output routing notice: $e');
+          }
         }
       };
 
       // Capture local audio
+      _log('Requesting local microphone capture...');
       _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': _audioConstraints, 'video': false});
+      _log('Microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
+
       for (final track in _localAudioStream!.getAudioTracks()) {
         track.enabled = true;
         await _peerConnection!.addTrack(track, _localAudioStream!);
+        _log('Added local audio track: ID=${track.id}');
       }
 
       if (isCaller) {
+        _log('Creating SDP Offer...');
         final offer = await _peerConnection!.createOffer({
           'mandatory': {
             'OfferToReceiveAudio': 'true',
@@ -83,11 +118,34 @@ class VoiceTunnelService {
           'optional': [],
         });
         await _peerConnection!.setLocalDescription(offer);
+        _log('Local Description set (Offer). Sending signaling offer frame...');
         onSendSignaling?.call(RelayMessage.webrtcOffer(offer.sdp ?? ''));
       }
-    } catch (e) {
-      debugPrint('[VOICE_TUNNEL] Exception starting tunnel: $e');
+    } catch (e, stack) {
+      _log('CRITICAL Exception in startVoiceTunnel: $e\n$stack');
     }
+  }
+
+  void _startStatsMonitoring() {
+    _statsTimer?.cancel();
+    _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
+      if (_peerConnection == null || !isConnected) return;
+      try {
+        final stats = await _peerConnection!.getStats();
+        int bytesSent = 0;
+        int bytesReceived = 0;
+        for (final report in stats) {
+          if (report.type == 'outbound-rtp' && report.values['kind'] == 'audio') {
+            bytesSent = (report.values['bytesSent'] as num?)?.toInt() ?? 0;
+          } else if (report.type == 'inbound-rtp' && report.values['kind'] == 'audio') {
+            bytesReceived = (report.values['bytesReceived'] as num?)?.toInt() ?? 0;
+          }
+        }
+        _log('Audio Flow Stats -> Sent: ${bytesSent}B | Recv: ${bytesReceived}B');
+      } catch (e) {
+        _log('Stats Error: $e');
+      }
+    });
   }
 
   final List<RTCIceCandidate> _pendingCandidates = [];
@@ -97,19 +155,23 @@ class VoiceTunnelService {
     try {
       if (msg.type == 'WEBRTC_OFFER') {
         final sdp = msg.data['sdp'] as String? ?? '';
+        _log('Received WebRTC Offer frame (${sdp.length} chars)');
         if (sdp.isNotEmpty) {
           if (_peerConnection == null) {
             await startVoiceTunnel(isCaller: false, sendSignaling: onSendSignaling ?? (_) {});
           }
           final description = RTCSessionDescription(sdp, 'offer');
           await _peerConnection!.setRemoteDescription(description);
+          _log('Remote Description set (Offer)');
 
           // Drain queued candidates
           for (final cand in _pendingCandidates) {
             await _peerConnection!.addCandidate(cand);
+            _log('Added buffered ICE candidate');
           }
           _pendingCandidates.clear();
 
+          _log('Creating SDP Answer...');
           final answer = await _peerConnection!.createAnswer({
             'mandatory': {
               'OfferToReceiveAudio': 'true',
@@ -118,17 +180,21 @@ class VoiceTunnelService {
             'optional': [],
           });
           await _peerConnection!.setLocalDescription(answer);
+          _log('Local Description set (Answer). Sending signaling answer frame...');
           onSendSignaling?.call(RelayMessage.webrtcAnswer(answer.sdp ?? ''));
         }
       } else if (msg.type == 'WEBRTC_ANSWER') {
         final sdp = msg.data['sdp'] as String? ?? '';
+        _log('Received WebRTC Answer frame (${sdp.length} chars)');
         if (sdp.isNotEmpty && _peerConnection != null) {
           final description = RTCSessionDescription(sdp, 'answer');
           await _peerConnection!.setRemoteDescription(description);
+          _log('Remote Description set (Answer)');
 
           // Drain queued candidates
           for (final cand in _pendingCandidates) {
             await _peerConnection!.addCandidate(cand);
+            _log('Added buffered ICE candidate');
           }
           _pendingCandidates.clear();
         }
@@ -138,6 +204,7 @@ class VoiceTunnelService {
           msg.data['sdpMid'] as String?,
           msg.data['sdpMLineIndex'] as int?,
         );
+        _log('Received Remote ICE Candidate');
         if (_peerConnection != null && _peerConnection!.signalingState != RTCSignalingState.RTCSignalingStateStable) {
           _pendingCandidates.add(candidate);
         } else if (_peerConnection != null) {
@@ -146,14 +213,17 @@ class VoiceTunnelService {
           _pendingCandidates.add(candidate);
         }
       }
-    } catch (e) {
-      debugPrint('[VOICE_TUNNEL] Exception handling signaling: $e');
+    } catch (e, stack) {
+      _log('Exception handling WebRTC signaling frame: $e\n$stack');
     }
   }
 
   /// Close voice tunnel and release audio resources
   Future<void> closeVoiceTunnel() async {
+    _log('Closing Voice Tunnel & cleaning up streams...');
     isConnected = false;
+    _statsTimer?.cancel();
+    _statsTimer = null;
     _signalingSub?.cancel();
     _signalingSub = null;
 
@@ -169,8 +239,9 @@ class VoiceTunnelService {
       await _peerConnection?.close();
       await _peerConnection?.dispose();
       _peerConnection = null;
+      _log('Voice Tunnel closed cleanly');
     } catch (e) {
-      debugPrint('[VOICE_TUNNEL] Exception closing tunnel: $e');
+      _log('Exception closing Voice Tunnel: $e');
     }
   }
 }

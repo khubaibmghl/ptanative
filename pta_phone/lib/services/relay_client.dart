@@ -470,6 +470,9 @@ class RelayClient {
                   _channel!.sink.add(msg.toJsonString());
                 }
               },
+              logCallback: (msg) {
+                logDiagnostic('[VOICE] $msg');
+              },
             );
           }
           _activeCallController.add(currentActiveCall);

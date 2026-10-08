@@ -14,6 +14,7 @@ void main() async {
   final telephonyController = TelephonyController();
   final server = RelayServer(telephonyController: telephonyController);
   final monitor = TelephonyMonitor(server: server);
+  server.telephonyMonitor = monitor;
   final telemetry = TelemetryService(server: server);
   final contentService = AndroidContentService(server: server);
   server.contentService = contentService;

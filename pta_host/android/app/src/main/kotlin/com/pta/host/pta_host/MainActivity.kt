@@ -181,6 +181,11 @@ class MainActivity : FlutterActivity() {
     private fun enableCallAudioRouting(enable: Boolean) {
         try {
             val audioManager = getSystemService(Context.AUDIO_SERVICE) as android.media.AudioManager
+            val prevMode = audioManager.mode
+            val prevSpeaker = audioManager.isSpeakerphoneOn
+            val prevMute = audioManager.isMicrophoneMute
+            android.util.Log.d("PTA_AUDIO", "enableCallAudioRouting(enable=$enable) PREV -> Mode: $prevMode, Speaker: $prevSpeaker, Mute: $prevMute")
+
             if (enable) {
                 audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
                 audioManager.isSpeakerphoneOn = true
@@ -189,8 +194,10 @@ class MainActivity : FlutterActivity() {
                 audioManager.mode = android.media.AudioManager.MODE_NORMAL
                 audioManager.isSpeakerphoneOn = false
             }
+
+            android.util.Log.d("PTA_AUDIO", "enableCallAudioRouting(enable=$enable) NEW -> Mode: ${audioManager.mode}, Speaker: ${audioManager.isSpeakerphoneOn}, Mute: ${audioManager.isMicrophoneMute}")
         } catch (e: Exception) {
-            e.printStackTrace()
+            android.util.Log.e("PTA_AUDIO", "Exception in enableCallAudioRouting: ${e.message}", e)
         }
     }
 }

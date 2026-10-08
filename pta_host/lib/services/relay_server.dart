@@ -19,6 +19,7 @@ class RelayServer {
   RawDatagramSocket? _udpSocket;
   final TelephonyController telephonyController;
   AndroidContentService? contentService;
+  dynamic telephonyMonitor;
   final voiceTunnel = VoiceTunnelService();
 
   final List<WebSocketChannel> _connectedSockets = [];
@@ -70,6 +71,9 @@ class RelayServer {
       isCaller: true,
       sendSignaling: (msg) {
         broadcast(msg);
+      },
+      logCallback: (msg) {
+        logEvent('Voice Tunnel', msg, ActivityType.info);
       },
     );
   }
@@ -307,6 +311,9 @@ class RelayServer {
         case 'ACTION_DIAL':
           final num = msg.data['number']?.toString() ?? '';
           logEvent('Dial Request', 'Calling $num from iPhone', ActivityType.call);
+          try {
+            telephonyMonitor?.setActiveDialNumber(num);
+          } catch (_) {}
           telephonyController.dialNumber(num);
           break;
         case 'ACTION_ANSWER':
@@ -373,6 +380,9 @@ class RelayServer {
         } catch (_) {}
       }
       if (num.isNotEmpty) {
+        try {
+          telephonyMonitor?.setActiveDialNumber(num);
+        } catch (_) {}
         telephonyController.dialNumber(num);
         logEvent('Dial Triggered', 'Calling $num via REST', ActivityType.call);
       }

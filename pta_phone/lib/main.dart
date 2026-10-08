@@ -224,56 +224,63 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   }
 
   Widget _buildMinimalHeaderDot() {
-    return StreamBuilder<DeviceStatusModel>(
-      stream: RelayClient.instance.statusStream,
-      initialData: RelayClient.instance.lastStatus,
-      builder: (context, snapshot) {
-        final isConnected = RelayClient.instance.isConnected;
+    return StreamBuilder<bool>(
+      stream: RelayClient.instance.connectionStream,
+      initialData: RelayClient.instance.isConnected,
+      builder: (context, connSnapshot) {
+        final isConnected = connSnapshot.data ?? RelayClient.instance.isConnected;
 
-        return Padding(
-          padding: const EdgeInsets.only(top: LiquidGlassTheme.dynamicIslandTopInset + 4, right: 18, bottom: 4),
-          child: Align(
-            alignment: Alignment.centerRight,
-            child: GestureDetector(
-              onTap: () {
-                final status = snapshot.data;
-                showModalBottomSheet(
-                  context: context,
-                  backgroundColor: const Color(0xF0121218),
-                  shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
-                  builder: (ctx) => Padding(
-                    padding: const EdgeInsets.all(24),
-                    child: Column(
-                      mainAxisSize: MainAxisSize.min,
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: [
-                        Text('Host Device Status', style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
-                        const SizedBox(height: 12),
-                        Text('Connection: ${isConnected ? "Connected to Host" : "Disconnected"}', style: const TextStyle(color: Colors.white70)),
-                        Text('Host IP: ${RelayClient.instance.hostIp}', style: const TextStyle(color: Colors.white70)),
-                        Text('Vivo Battery: ${status != null ? "${status.batteryLevel}% ${status.isCharging ? '(Charging)' : ''}" : "Unknown"}', style: const TextStyle(color: Colors.white70)),
+        return StreamBuilder<DeviceStatusModel>(
+          stream: RelayClient.instance.statusStream,
+          initialData: RelayClient.instance.lastStatus,
+          builder: (context, statusSnapshot) {
+            final status = statusSnapshot.data;
+
+            return Padding(
+              padding: const EdgeInsets.only(top: LiquidGlassTheme.dynamicIslandTopInset + 4, right: 18, bottom: 4),
+              child: Align(
+                alignment: Alignment.centerRight,
+                child: GestureDetector(
+                  onTap: () {
+                    showModalBottomSheet(
+                      context: context,
+                      backgroundColor: const Color(0xF0121218),
+                      shape: const RoundedRectangleBorder(borderRadius: BorderRadius.vertical(top: Radius.circular(20))),
+                      builder: (ctx) => Padding(
+                        padding: const EdgeInsets.all(24),
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Text('Host Device Status', style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 18, fontWeight: FontWeight.bold)),
+                            const SizedBox(height: 12),
+                            Text('Connection: ${isConnected ? "Connected to Host" : "Disconnected"}', style: const TextStyle(color: Colors.white70)),
+                            Text('Host IP: ${RelayClient.instance.hostIp}', style: const TextStyle(color: Colors.white70)),
+                            Text('Vivo Battery: ${status != null ? "${status.batteryLevel}% ${status.isCharging ? '(Charging)' : ''}" : "Unknown"}', style: const TextStyle(color: Colors.white70)),
+                          ],
+                        ),
+                      ),
+                    );
+                  },
+                  child: Container(
+                    width: 10,
+                    height: 10,
+                    decoration: BoxDecoration(
+                      color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed,
+                      shape: BoxShape.circle,
+                      boxShadow: [
+                        BoxShadow(
+                          color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed).withValues(alpha: 0.6),
+                          blurRadius: 6,
+                          spreadRadius: 1,
+                        ),
                       ],
                     ),
                   ),
-                );
-              },
-              child: Container(
-                width: 10,
-                height: 10,
-                decoration: BoxDecoration(
-                  color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed,
-                  shape: BoxShape.circle,
-                  boxShadow: [
-                    BoxShadow(
-                      color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.crimsonRed).withValues(alpha: 0.6),
-                      blurRadius: 6,
-                      spreadRadius: 1,
-                    ),
-                  ],
                 ),
               ),
-            ),
-          ),
+            );
+          },
         );
       },
     );

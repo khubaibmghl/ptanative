@@ -42,18 +42,29 @@ class TelephonyMonitor {
     _lastPhase = 'IDLE';
   }
 
+  void setActiveDialNumber(String number) {
+    final clean = number.trim();
+    if (clean.isNotEmpty) {
+      _activeNumber = clean;
+      debugPrint('[TELEPHONY_MONITOR] Active outgoing number registered: $_activeNumber');
+    }
+  }
+
   void _processNativeCallState(String state, String incomingNum) {
     final now = DateTime.now().millisecondsSinceEpoch ~/ 1000;
-    debugPrint('[TELEPHONY_MONITOR] State Event: $state | Num: $incomingNum | LastPhase: $_lastPhase');
+    if (incomingNum.trim().isNotEmpty) {
+      _activeNumber = incomingNum.trim();
+    }
+    debugPrint('[TELEPHONY_MONITOR] State Event: $state | Num: $incomingNum | ActiveNum: $_activeNumber | LastPhase: $_lastPhase');
 
     if (state == 'RINGING') {
       if (_lastPhase != 'RINGING') {
         _lastPhase = 'RINGING';
-        _activeNumber = incomingNum.isNotEmpty ? incomingNum : 'Cellular Call';
+        if (incomingNum.isNotEmpty) _activeNumber = incomingNum;
         _talkStartTime = 0;
         _callLogged = false;
 
-        String resolvedName = _activeNumber;
+        String resolvedName = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
         String? resolvedLabel;
         for (final c in server.cachedContacts) {
           if (c.matchesNumber(_activeNumber)) {
@@ -65,7 +76,7 @@ class TelephonyMonitor {
 
         server.logEvent('Incoming Call', '$resolvedName (${PhoneNumberNormalizer.formatForDisplay(_activeNumber)})', ActivityType.call);
         server.broadcast(RelayMessage.incomingRing(
-          number: _activeNumber,
+          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
           name: resolvedName,
           label: resolvedLabel,
         ));
@@ -74,19 +85,40 @@ class TelephonyMonitor {
           'is_in_call': true,
           'is_connected': false,
           'status': 'Incoming Call',
-          'number': _activeNumber,
+          'number': _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
           'duration_seconds': 0,
           'duration_formatted': '00:00',
         });
       }
-    } else if (state == 'ACTIVE' || state == 'OFFHOOK') {
+    } else if (state == 'DIALING' || (state == 'OFFHOOK' && _lastPhase == 'IDLE')) {
+      if (_lastPhase != 'ACTIVE' && _lastPhase != 'DIALING') {
+        _lastPhase = 'DIALING';
+        _talkStartTime = 0;
+        _callLogged = false;
+        final dialNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
+        server.logEvent('Dialing Outgoing', dialNum, ActivityType.call);
+        server.broadcast(RelayMessage.callDialing(
+          number: dialNum,
+        ));
+
+        server.currentCallState.addAll({
+          'is_in_call': true,
+          'is_connected': false,
+          'status': 'Calling...',
+          'number': dialNum,
+          'duration_seconds': 0,
+          'duration_formatted': '00:00',
+        });
+      }
+    } else if (state == 'ACTIVE' || (state == 'OFFHOOK' && _lastPhase == 'DIALING')) {
       if (_lastPhase != 'ACTIVE') {
         _lastPhase = 'ACTIVE';
         _talkStartTime = now;
         _callLogged = false;
+        final activeNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
         server.logEvent('Call Connected', 'Audio tunnel starting...', ActivityType.call);
         server.broadcast(RelayMessage.callActive(
-          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
+          number: activeNum,
           startTime: _talkStartTime,
         ));
         server.startVoiceTunnel();
@@ -95,26 +127,7 @@ class TelephonyMonitor {
           'is_in_call': true,
           'is_connected': true,
           'status': 'Active Call',
-          'number': _activeNumber,
-          'duration_seconds': 0,
-          'duration_formatted': '00:00',
-        });
-      }
-    } else if (state == 'DIALING') {
-      if (_lastPhase != 'ACTIVE' && _lastPhase != 'DIALING') {
-        _lastPhase = 'DIALING';
-        _talkStartTime = 0;
-        _callLogged = false;
-        server.logEvent('Dialing Outgoing', _activeNumber, ActivityType.call);
-        server.broadcast(RelayMessage.callDialing(
-          number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
-        ));
-
-        server.currentCallState.addAll({
-          'is_in_call': true,
-          'is_connected': false,
-          'status': 'Calling...',
-          'number': _activeNumber,
+          'number': activeNum,
           'duration_seconds': 0,
           'duration_formatted': '00:00',
         });
@@ -123,9 +136,10 @@ class TelephonyMonitor {
       if (['ACTIVE', 'RINGING', 'DIALING'].contains(_lastPhase)) {
         if (!_callLogged) {
           final dur = _lastPhase == 'ACTIVE' && _talkStartTime > 0 ? (now - _talkStartTime) : 0;
+          final finalNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
           server.logEvent('Call Ended', 'Phase: $_lastPhase | Duration: ${dur}s', ActivityType.info);
           server.broadcast(RelayMessage.callDisconnected(
-            number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
+            number: finalNum,
             duration: dur,
           ));
           server.stopVoiceTunnel();
