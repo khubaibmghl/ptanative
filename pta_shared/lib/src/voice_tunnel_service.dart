@@ -7,6 +7,7 @@ typedef SendSignalingCallback = void Function(RelayMessage msg);
 typedef DiagnosticLogCallback = void Function(String message);
 
 class VoiceTunnelService {
+  RTCVideoRenderer? _remoteAudioRenderer;
   RTCPeerConnection? _peerConnection;
   MediaStream? _localAudioStream;
   MediaStream? _remoteAudioStream;
@@ -35,6 +36,8 @@ class VoiceTunnelService {
       'googAutoGainControl': 'true',
       'googNoiseSuppression': 'true',
       'googHighpassFilter': 'true',
+      'echoCancellation': 'true',
+      'noiseSuppression': 'true',
     },
     'optional': [],
   };
@@ -52,6 +55,10 @@ class VoiceTunnelService {
     await closeVoiceTunnel();
 
     try {
+      _remoteAudioRenderer = RTCVideoRenderer();
+      await _remoteAudioRenderer!.initialize();
+      _log('RTCVideoRenderer sink initialized for audio output');
+
       _peerConnection = await createPeerConnection(_rtcConfiguration);
       _log('PeerConnection created successfully');
 
@@ -83,14 +90,20 @@ class VoiceTunnelService {
         }
       };
 
-      _peerConnection!.onTrack = (event) {
+      _peerConnection!.onTrack = (event) async {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
           event.track.enabled = true;
           _log('Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}');
+
+          if (_remoteAudioStream != null && _remoteAudioRenderer != null) {
+            _remoteAudioRenderer!.srcObject = _remoteAudioStream;
+            _log('Bound remote audio stream to WebRTC hardware AudioUnit renderer sink');
+          }
+
           try {
             if (defaultTargetPlatform == TargetPlatform.iOS) {
-              Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+              await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
                 appleAudioCategory: AppleAudioCategory.playAndRecord,
                 appleAudioMode: AppleAudioMode.voiceChat,
                 appleAudioCategoryOptions: {
@@ -99,7 +112,7 @@ class VoiceTunnelService {
                 },
               ));
             }
-            Helper.selectAudioOutput('speaker');
+            await Helper.selectAudioOutput('speaker');
             _log('Audio output routed to speaker successfully');
           } catch (e) {
             _log('Audio output routing notice: $e');
@@ -255,6 +268,12 @@ class VoiceTunnelService {
     _signalingSub = null;
 
     try {
+      if (_remoteAudioRenderer != null) {
+        _remoteAudioRenderer!.srcObject = null;
+        await _remoteAudioRenderer!.dispose();
+        _remoteAudioRenderer = null;
+      }
+
       _localAudioStream?.getTracks().forEach((t) => t.stop());
       await _localAudioStream?.dispose();
       _localAudioStream = null;
