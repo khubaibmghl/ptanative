@@ -93,10 +93,10 @@ class VoiceTunnelService {
               Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
                 appleAudioCategory: AppleAudioCategory.playAndRecord,
                 appleAudioMode: AppleAudioMode.voiceChat,
-                appleAudioCategoryOptions: [
-                  AppleAudioCategoryOptions.defaultToSpeaker,
-                  AppleAudioCategoryOptions.allowBluetooth,
-                ],
+                appleAudioCategoryOptions: {
+                  AppleAudioCategoryOption.defaultToSpeaker,
+                  AppleAudioCategoryOption.allowBluetooth,
+                },
               ));
             }
             Helper.selectAudioOutput('speaker');
