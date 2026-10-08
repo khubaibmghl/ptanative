@@ -190,6 +190,8 @@ class MainActivity : FlutterActivity() {
                 audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
                 audioManager.isSpeakerphoneOn = true
                 audioManager.isMicrophoneMute = false
+                val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_VOICE_CALL)
+                audioManager.setStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL, maxVol, 0)
             } else {
                 audioManager.mode = android.media.AudioManager.MODE_NORMAL
                 audioManager.isSpeakerphoneOn = false

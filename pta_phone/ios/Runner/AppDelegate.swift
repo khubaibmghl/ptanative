@@ -13,22 +13,55 @@ import AVFoundation
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     startSilentAudioKeepAlive()
+    setupAudioInterruptionObserver()
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
 
   private func startSilentAudioKeepAlive() {
+    ensureKeepAlivePlaying()
+  }
+
+  private func setupAudioInterruptionObserver() {
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAudioInterruption(_:)),
+      name: AVAudioSession.interruptionNotification,
+      object: AVAudioSession.sharedInstance()
+    )
+  }
+
+  @objc private func handleAudioInterruption(_ notification: Notification) {
+    guard let userInfo = notification.userInfo,
+          let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
+          let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
+      return
+    }
+
+    if type == .ended {
+      print("[AppDelegate] Audio Interruption Ended -> Resuming background keep-alive...")
+      ensureKeepAlivePlaying()
+    }
+  }
+
+  private func ensureKeepAlivePlaying() {
     do {
       let audioSession = AVAudioSession.sharedInstance()
       try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
       try audioSession.setActive(true)
 
-      let silentWavData = createSilentWavData()
-      silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
-      silentAudioPlayer?.numberOfLoops = -1
-      silentAudioPlayer?.volume = 0.01
-      silentAudioPlayer?.play()
+      if silentAudioPlayer == nil {
+        let silentWavData = createSilentWavData()
+        silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
+        silentAudioPlayer?.numberOfLoops = -1
+        silentAudioPlayer?.volume = 0.01
+      }
+
+      if silentAudioPlayer?.isPlaying == false {
+        silentAudioPlayer?.play()
+        print("[AppDelegate] Silent audio keep-alive player actively playing.")
+      }
     } catch {
-      print("[AppDelegate] Audio Keep-Alive Exception: \(error)")
+      print("[AppDelegate] Ensure Keep-Alive Exception: \(error)")
     }
   }
 
@@ -94,6 +127,7 @@ import AVFoundation
 
   override func applicationDidEnterBackground(_ application: UIApplication) {
     super.applicationDidEnterBackground(application)
+    ensureKeepAlivePlaying()
     backgroundTask = application.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") {
       application.endBackgroundTask(self.backgroundTask)
       self.backgroundTask = .invalid
@@ -102,6 +136,7 @@ import AVFoundation
 
   override func applicationWillEnterForeground(_ application: UIApplication) {
     super.applicationWillEnterForeground(application)
+    ensureKeepAlivePlaying()
     if backgroundTask != .invalid {
       application.endBackgroundTask(backgroundTask)
       backgroundTask = .invalid

@@ -89,8 +89,18 @@ class VoiceTunnelService {
           event.track.enabled = true;
           _log('Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}');
           try {
-            Helper.selectAudioOutput('earpiece');
-            _log('Audio output routed to earpiece successfully');
+            if (defaultTargetPlatform == TargetPlatform.iOS) {
+              Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+                appleAudioCategory: AppleAudioCategory.playAndRecord,
+                appleAudioMode: AppleAudioMode.voiceChat,
+                appleAudioCategoryOptions: [
+                  AppleAudioCategoryOptions.defaultToSpeaker,
+                  AppleAudioCategoryOptions.allowBluetooth,
+                ],
+              ));
+            }
+            Helper.selectAudioOutput('speaker');
+            _log('Audio output routed to speaker successfully');
           } catch (e) {
             _log('Audio output routing notice: $e');
           }
@@ -172,29 +182,31 @@ class VoiceTunnelService {
         final sdp = msg.data['sdp'] as String? ?? '';
         _log('Received WebRTC Offer frame (${sdp.length} chars)');
         if (sdp.isNotEmpty) {
-          if (_peerConnection == null) {
-            await startVoiceTunnel(isCaller: false, sendSignaling: onSendSignaling ?? (_) {});
-          }
+          await startVoiceTunnel(isCaller: false, sendSignaling: onSendSignaling ?? (_) {});
+
+          final pc = _peerConnection;
+          if (pc == null) return;
+
           final description = RTCSessionDescription(sdp, 'offer');
-          await _peerConnection!.setRemoteDescription(description);
+          await pc.setRemoteDescription(description);
           _log('Remote Description set (Offer)');
 
           // Drain queued candidates
           for (final cand in _pendingCandidates) {
-            await _peerConnection!.addCandidate(cand);
+            await pc.addCandidate(cand);
             _log('Added buffered ICE candidate');
           }
           _pendingCandidates.clear();
 
           _log('Creating SDP Answer...');
-          final answer = await _peerConnection!.createAnswer({
+          final answer = await pc.createAnswer({
             'mandatory': {
               'OfferToReceiveAudio': 'true',
               'OfferToReceiveVideo': 'false',
             },
             'optional': [],
           });
-          await _peerConnection!.setLocalDescription(answer);
+          await pc.setLocalDescription(answer);
           _log('Local Description set (Answer). Sending signaling answer frame...');
           onSendSignaling?.call(RelayMessage.webrtcAnswer(answer.sdp ?? ''));
         }
