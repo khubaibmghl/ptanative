@@ -102,22 +102,32 @@ class VoiceTunnelService {
       _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': _audioConstraints, 'video': false});
       _log('Microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
 
-      for (final track in _localAudioStream!.getAudioTracks()) {
-        track.enabled = true;
-        await _peerConnection!.addTrack(track, _localAudioStream!);
-        _log('Added local audio track: ID=${track.id}');
+      if (_peerConnection == null) {
+        _log('PeerConnection is null after mic capture. Re-initializing PeerConnection...');
+        _peerConnection = await createPeerConnection(_rtcConfiguration);
       }
 
-      if (isCaller) {
+      final pc = _peerConnection;
+      if (pc != null && _localAudioStream != null) {
+        for (final track in _localAudioStream!.getAudioTracks()) {
+          track.enabled = true;
+          await pc.addTrack(track, _localAudioStream!);
+          _log('Added local audio track: ID=${track.id}');
+        }
+      } else {
+        _log('WARNING: Cannot add track - PeerConnection is null!');
+      }
+
+      if (pc != null && isCaller) {
         _log('Creating SDP Offer...');
-        final offer = await _peerConnection!.createOffer({
+        final offer = await pc.createOffer({
           'mandatory': {
             'OfferToReceiveAudio': 'true',
             'OfferToReceiveVideo': 'false',
           },
           'optional': [],
         });
-        await _peerConnection!.setLocalDescription(offer);
+        await pc.setLocalDescription(offer);
         _log('Local Description set (Offer). Sending signaling offer frame...');
         onSendSignaling?.call(RelayMessage.webrtcOffer(offer.sdp ?? ''));
       }
@@ -133,15 +143,20 @@ class VoiceTunnelService {
       try {
         final stats = await _peerConnection!.getStats();
         int bytesSent = 0;
+        int packetsSent = 0;
         int bytesReceived = 0;
+        int packetsReceived = 0;
         for (final report in stats) {
-          if (report.type == 'outbound-rtp' && report.values['kind'] == 'audio') {
+          final isAudio = report.values['kind'] == 'audio' || report.values['mediaType'] == 'audio';
+          if (report.type == 'outbound-rtp' && isAudio) {
             bytesSent = (report.values['bytesSent'] as num?)?.toInt() ?? 0;
-          } else if (report.type == 'inbound-rtp' && report.values['kind'] == 'audio') {
+            packetsSent = (report.values['packetsSent'] as num?)?.toInt() ?? 0;
+          } else if (report.type == 'inbound-rtp' && isAudio) {
             bytesReceived = (report.values['bytesReceived'] as num?)?.toInt() ?? 0;
+            packetsReceived = (report.values['packetsReceived'] as num?)?.toInt() ?? 0;
           }
         }
-        _log('Audio Flow Stats -> Sent: ${bytesSent}B | Recv: ${bytesReceived}B');
+        _log('Audio Tunnel Stats 📊 -> Sent: $packetsSent pkts (${bytesSent}B) | Recv: $packetsReceived pkts (${bytesReceived}B)');
       } catch (e) {
         _log('Stats Error: $e');
       }
