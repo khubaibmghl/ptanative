@@ -31,6 +31,9 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting showCallkitIncoming for caller "$callerName" ($handle) [UUID: $validUuid]');
+      debugPrint('[CALLKIT_DIAGNOSTIC] 🎙️ CallKit iOS Audio Session settings -> Mode: voiceChat, Active: true, SampleRate: 44100Hz, BufferDuration: 0.005s');
+
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
@@ -73,8 +76,9 @@ class CallKitService {
       );
 
       await FlutterCallkitIncoming.showCallkitIncoming(params);
+      debugPrint('[CALLKIT_DIAGNOSTIC] ✅ showCallkitIncoming triggered successfully');
     } catch (e) {
-      debugPrint('[CALLKIT] Exception during showCallkitIncoming: $e');
+      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception during showCallkitIncoming: $e');
     }
   }
 
@@ -85,6 +89,7 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting startCall for "$callerName" ($handle) [UUID: $validUuid]');
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
@@ -103,24 +108,27 @@ class CallKitService {
         ),
       );
       await FlutterCallkitIncoming.startCall(params);
+      debugPrint('[CALLKIT_DIAGNOSTIC] ✅ startCall completed successfully');
     } catch (e) {
-      debugPrint('[CALLKIT] Exception during startCall: $e');
+      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception during startCall: $e');
     }
   }
 
   Future<void> endCall(String callId) async {
     try {
+      debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending CallKit call ID: $callId');
       await FlutterCallkitIncoming.endCall(callId);
     } catch (e) {
-      debugPrint('[CALLKIT] Exception ending call: $e');
+      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending call: $e');
     }
   }
 
   Future<void> endAllCalls() async {
     try {
+      debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending all CallKit active calls and releasing iOS AudioSession');
       await FlutterCallkitIncoming.endAllCalls();
     } catch (e) {
-      debugPrint('[CALLKIT] Exception ending all calls: $e');
+      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending all calls: $e');
     }
   }
 }

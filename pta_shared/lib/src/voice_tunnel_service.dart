@@ -94,15 +94,18 @@ class VoiceTunnelService {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
           event.track.enabled = true;
-          _log('Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}');
+          _log('🎵 Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}, muted=${event.track.muted}, readyState=${event.track.readyState}');
 
           if (_remoteAudioStream != null && _remoteAudioRenderer != null) {
             _remoteAudioRenderer!.srcObject = _remoteAudioStream;
-            _log('Bound remote audio stream to WebRTC hardware AudioUnit renderer sink');
+            _log('✅ Bound remote audio stream (ID=${_remoteAudioStream!.id}) to WebRTC hardware AudioUnit renderer sink');
+          } else {
+            _log('⚠️ WARNING: Remote audio stream or renderer is null! Stream: ${_remoteAudioStream != null}, Renderer: ${_remoteAudioRenderer != null}');
           }
 
           try {
             if (defaultTargetPlatform == TargetPlatform.iOS) {
+              _log('Configuring iOS AVAudioSession -> Category: playAndRecord, Mode: voiceChat, Options: defaultToSpeaker + allowBluetooth');
               await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
                 appleAudioCategory: AppleAudioCategory.playAndRecord,
                 appleAudioMode: AppleAudioMode.voiceChat,
@@ -111,11 +114,12 @@ class VoiceTunnelService {
                   AppleAudioCategoryOption.allowBluetooth,
                 },
               ));
+              _log('iOS AVAudioSession configuration applied cleanly.');
             }
             await Helper.selectAudioOutput('speaker');
-            _log('Audio output routed to speaker successfully');
+            _log('🔊 Audio output successfully routed to iPhone speaker');
           } catch (e) {
-            _log('Audio output routing notice: $e');
+            _log('⚠️ Audio output routing notice: $e');
           }
         }
       };
@@ -174,8 +178,13 @@ class VoiceTunnelService {
     }
   }
 
+  int _lastPacketsReceived = 0;
+  int _stalledPacketCount = 0;
+
   void _startStatsMonitoring() {
     _statsTimer?.cancel();
+    _lastPacketsReceived = 0;
+    _stalledPacketCount = 0;
     _statsTimer = Timer.periodic(const Duration(seconds: 2), (_) async {
       if (_peerConnection == null || !isConnected) return;
       try {
@@ -184,6 +193,9 @@ class VoiceTunnelService {
         int packetsSent = 0;
         int bytesReceived = 0;
         int packetsReceived = 0;
+        int packetsLost = 0;
+        double audioLevel = 0.0;
+
         for (final report in stats) {
           final isAudio = report.values['kind'] == 'audio' || report.values['mediaType'] == 'audio';
           if (report.type == 'outbound-rtp' && isAudio) {
@@ -192,9 +204,34 @@ class VoiceTunnelService {
           } else if (report.type == 'inbound-rtp' && isAudio) {
             bytesReceived = (report.values['bytesReceived'] as num?)?.toInt() ?? 0;
             packetsReceived = (report.values['packetsReceived'] as num?)?.toInt() ?? 0;
+            packetsLost = (report.values['packetsLost'] as num?)?.toInt() ?? 0;
+            audioLevel = (report.values['audioLevel'] as num?)?.toDouble() ??
+                (report.values['audioOutputLevel'] as num?)?.toDouble() ?? 0.0;
           }
         }
-        _log('Audio Tunnel Stats 📊 -> Sent: $packetsSent pkts (${bytesSent}B) | Recv: $packetsReceived pkts (${bytesReceived}B)');
+
+        final pktDelta = packetsReceived - _lastPacketsReceived;
+        _lastPacketsReceived = packetsReceived;
+
+        final levelMeter = audioLevel > 0.01
+            ? '🔊 ACTIVE AUDIO (${(audioLevel * 100).toStringAsFixed(0)}%)'
+            : '🔇 SILENT (0%)';
+
+        _log('Audio Tunnel Stats 📊 -> Recv: $packetsReceived pkts (+$pktDelta, ${bytesReceived}B) | Sent: $packetsSent pkts (${bytesSent}B) | Lost: $packetsLost | Level: $levelMeter');
+
+        if (pktDelta == 0 && packetsReceived == 0) {
+          _stalledPacketCount++;
+          if (_stalledPacketCount >= 3) {
+            _log('⚠️ [AUDIO_DIAGNOSTIC WARNING] Zero inbound audio packets received in last ${_stalledPacketCount * 2}s! Check if Android host mic/cellular call audio is transmitting.');
+          }
+        } else if (pktDelta == 0 && packetsReceived > 0) {
+          _stalledPacketCount++;
+          if (_stalledPacketCount >= 4) {
+            _log('⚠️ [AUDIO_DIAGNOSTIC NOTICE] Inbound audio packet flow paused (stalled at $packetsReceived pkts for ${_stalledPacketCount * 2}s).');
+          }
+        } else {
+          _stalledPacketCount = 0;
+        }
       } catch (e) {
         _log('Stats Error: $e');
       }
@@ -303,6 +340,37 @@ class VoiceTunnelService {
       _log('Voice Tunnel closed cleanly');
     } catch (e) {
       _log('Exception closing Voice Tunnel: $e');
+    }
+  }
+
+  /// Dynamically switch audio output route on iOS/Android (e.g. 'speaker', 'earpiece', 'bluetooth')
+  Future<void> setAudioOutputRoute(String route) async {
+    _log('🔊 Requesting audio output route change to: $route');
+    try {
+      if (defaultTargetPlatform == TargetPlatform.iOS) {
+        if (route == 'speaker') {
+          await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+            appleAudioCategory: AppleAudioCategory.playAndRecord,
+            appleAudioMode: AppleAudioMode.voiceChat,
+            appleAudioCategoryOptions: {
+              AppleAudioCategoryOption.defaultToSpeaker,
+              AppleAudioCategoryOption.allowBluetooth,
+            },
+          ));
+        } else if (route == 'earpiece') {
+          await Helper.setAppleAudioConfiguration(AppleAudioConfiguration(
+            appleAudioCategory: AppleAudioCategory.playAndRecord,
+            appleAudioMode: AppleAudioMode.voiceChat,
+            appleAudioCategoryOptions: {
+              AppleAudioCategoryOption.allowBluetooth,
+            },
+          ));
+        }
+      }
+      await Helper.selectAudioOutput(route);
+      _log('✅ Audio output route switched to: $route');
+    } catch (e) {
+      _log('⚠️ Exception switching audio route to $route: $e');
     }
   }
 }
