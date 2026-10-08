@@ -122,7 +122,22 @@ class VoiceTunnelService {
 
       // Capture local audio
       _log('Requesting local microphone capture...');
-      _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': _audioConstraints, 'video': false});
+      final Map<String, dynamic> audioConstraints = {
+        'mandatory': {
+          'googEchoCancellation': 'true',
+          'googAutoGainControl': 'true',
+          'googNoiseSuppression': 'true',
+          'googHighpassFilter': 'true',
+          'echoCancellation': 'true',
+          'noiseSuppression': 'true',
+        },
+        'optional': defaultTargetPlatform == TargetPlatform.android
+            ? [
+                {'googAudioSource': '6'}, // VOICE_RECOGNITION (bypasses Android cellular call mic lock on Vivo)
+              ]
+            : [],
+      };
+      _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints, 'video': false});
       _log('Microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
 
       if (_peerConnection == null) {

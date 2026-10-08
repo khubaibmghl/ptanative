@@ -61,7 +61,7 @@ class CallKitService {
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
           audioSessionMode: 'voiceChat',
-          audioSessionActive: false,
+          audioSessionActive: true,
           audioSessionPreferredSampleRate: 44100.0,
           audioSessionPreferredIOBufferDuration: 0.005,
           supportsDTMF: true,
@@ -99,6 +99,7 @@ class CallKitService {
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
           audioSessionMode: 'voiceChat',
+          audioSessionActive: true,
         ),
       );
       await FlutterCallkitIncoming.startCall(params);
