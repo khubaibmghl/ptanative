@@ -87,7 +87,7 @@ class VoiceTunnelService {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
           event.track.enabled = true;
-          _log('Remote audio track received! ID=${event.track.id}, enabled=${event.track.enabled}, state=${event.track.state}');
+          _log('Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}');
           try {
             Helper.selectAudioOutput('earpiece');
             _log('Audio output routed to earpiece successfully');
