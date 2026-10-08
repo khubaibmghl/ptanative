@@ -94,7 +94,7 @@ class VoiceTunnelService {
         if (event.track.kind == 'audio') {
           _remoteAudioStream = event.streams.isNotEmpty ? event.streams[0] : null;
           event.track.enabled = true;
-          _log('🎵 Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}, muted=${event.track.muted}, readyState=${event.track.readyState}');
+          _log('🎵 Remote audio track received! ID=${event.track.id}, kind=${event.track.kind}, enabled=${event.track.enabled}, muted=${event.track.muted}');
 
           if (_remoteAudioStream != null && _remoteAudioRenderer != null) {
             _remoteAudioRenderer!.srcObject = _remoteAudioStream;
