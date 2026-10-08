@@ -137,12 +137,19 @@ class VoiceTunnelService {
         },
         'optional': defaultTargetPlatform == TargetPlatform.android
             ? [
-                {'googAudioSource': '6'}, // VOICE_RECOGNITION (bypasses Android cellular call mic lock on Vivo)
+                {'googAudioSource': '7'}, // VOICE_COMMUNICATION (matches Android AudioManager MODE_IN_COMMUNICATION on Vivo)
               ]
             : [],
       };
-      _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints, 'video': false});
-      _log('Microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
+
+      try {
+        _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints, 'video': false});
+        _log('Microphone capture granted via VOICE_COMMUNICATION (${_localAudioStream!.getAudioTracks().length} tracks)');
+      } catch (e) {
+        _log('Primary mic capture notice: $e. Retrying with default audio constraints...');
+        _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+        _log('Fallback microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
+      }
 
       if (_peerConnection == null) {
         _log('PeerConnection is null after mic capture. Re-initializing PeerConnection...');
