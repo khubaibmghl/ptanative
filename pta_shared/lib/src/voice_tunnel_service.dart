@@ -126,29 +126,49 @@ class VoiceTunnelService {
 
       // Capture local audio
       _log('Requesting local microphone capture...');
-      final Map<String, dynamic> audioConstraints = {
+      final Map<String, dynamic> audioConstraints7 = {
         'mandatory': {
           'googEchoCancellation': 'true',
           'googAutoGainControl': 'true',
           'googNoiseSuppression': 'true',
-          'googHighpassFilter': 'true',
           'echoCancellation': 'true',
           'noiseSuppression': 'true',
         },
         'optional': defaultTargetPlatform == TargetPlatform.android
             ? [
-                {'googAudioSource': '7'}, // VOICE_COMMUNICATION (matches Android AudioManager MODE_IN_COMMUNICATION on Vivo)
+                {'googAudioSource': '7'}, // VOICE_COMMUNICATION
+              ]
+            : [],
+      };
+
+      final Map<String, dynamic> audioConstraints1 = {
+        'mandatory': {
+          'googEchoCancellation': 'true',
+          'googAutoGainControl': 'true',
+          'googNoiseSuppression': 'true',
+          'echoCancellation': 'true',
+          'noiseSuppression': 'true',
+        },
+        'optional': defaultTargetPlatform == TargetPlatform.android
+            ? [
+                {'googAudioSource': '1'}, // MIC Source 1
               ]
             : [],
       };
 
       try {
-        _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints, 'video': false});
-        _log('Microphone capture granted via VOICE_COMMUNICATION (${_localAudioStream!.getAudioTracks().length} tracks)');
+        _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints7, 'video': false});
+        _log('Microphone capture granted via VOICE_COMMUNICATION source 7 (${_localAudioStream!.getAudioTracks().length} tracks)');
       } catch (e) {
-        _log('Primary mic capture notice: $e. Retrying with default audio constraints...');
-        _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
-        _log('Fallback microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
+        _log('Source 7 capture notice ($e). Trying MIC source 1...');
+        try {
+          _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': audioConstraints1, 'video': false});
+          _log('Microphone capture granted via MIC source 1 (${_localAudioStream!.getAudioTracks().length} tracks)');
+        } catch (e2) {
+          _log('Source 1 capture notice ($e2). Retrying with standard audio constraints...');
+          _localAudioStream = await navigator.mediaDevices.getUserMedia({'audio': true, 'video': false});
+          _log('Fallback microphone capture granted (${_localAudioStream!.getAudioTracks().length} tracks)');
+        }
       }
 
       if (_peerConnection == null) {

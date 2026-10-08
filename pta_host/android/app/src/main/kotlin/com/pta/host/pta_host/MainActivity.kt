@@ -187,11 +187,16 @@ class MainActivity : FlutterActivity() {
             android.util.Log.d("PTA_AUDIO", "enableCallAudioRouting(enable=$enable) PREV -> Mode: $prevMode, Speaker: $prevSpeaker, Mute: $prevMute")
 
             if (enable) {
-                audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                // If system is already in GSM cellular call mode (MODE_IN_CALL), preserve it so baseband mic is not muted!
+                if (audioManager.mode != android.media.AudioManager.MODE_IN_CALL) {
+                    audioManager.mode = android.media.AudioManager.MODE_IN_COMMUNICATION
+                }
                 audioManager.isSpeakerphoneOn = true
                 audioManager.isMicrophoneMute = false
                 val maxVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_VOICE_CALL)
                 audioManager.setStreamVolume(android.media.AudioManager.STREAM_VOICE_CALL, maxVol, 0)
+                val musicVol = audioManager.getStreamMaxVolume(android.media.AudioManager.STREAM_MUSIC)
+                audioManager.setStreamVolume(android.media.AudioManager.STREAM_MUSIC, musicVol, 0)
             } else {
                 audioManager.mode = android.media.AudioManager.MODE_NORMAL
                 audioManager.isSpeakerphoneOn = false
