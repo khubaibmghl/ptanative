@@ -256,12 +256,13 @@ class VoiceTunnelService {
           await pc.setRemoteDescription(description);
           _log('Remote Description set (Offer)');
 
-          // Drain queued candidates
-          for (final cand in _pendingCandidates) {
+          // Drain queued candidates safely via snapshot copy to prevent concurrent modification during await
+          final candidatesToProcess = List<RTCIceCandidate>.from(_pendingCandidates);
+          _pendingCandidates.clear();
+          for (final cand in candidatesToProcess) {
             await pc.addCandidate(cand);
             _log('Added buffered ICE candidate');
           }
-          _pendingCandidates.clear();
 
           _log('Creating SDP Answer...');
           final answer = await pc.createAnswer({
@@ -283,12 +284,13 @@ class VoiceTunnelService {
           await _peerConnection!.setRemoteDescription(description);
           _log('Remote Description set (Answer)');
 
-          // Drain queued candidates
-          for (final cand in _pendingCandidates) {
+          // Drain queued candidates safely via snapshot copy
+          final candidatesToProcess = List<RTCIceCandidate>.from(_pendingCandidates);
+          _pendingCandidates.clear();
+          for (final cand in candidatesToProcess) {
             await _peerConnection!.addCandidate(cand);
             _log('Added buffered ICE candidate');
           }
-          _pendingCandidates.clear();
         }
       } else if (msg.type == 'WEBRTC_ICE_CANDIDATE') {
         final candidate = RTCIceCandidate(
