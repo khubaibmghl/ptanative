@@ -4,6 +4,9 @@ import 'services/relay_server.dart';
 import 'services/telephony_monitor.dart';
 import 'services/telemetry_service.dart';
 import 'services/android_content_service.dart';
+import 'services/host_permission_service.dart';
+import 'services/hotspot_service.dart';
+import 'widgets/host_permission_sheet.dart';
 import 'screens/dashboard_screen.dart';
 import 'screens/live_activity_screen.dart';
 import 'screens/settings_screen.dart';
@@ -22,14 +25,26 @@ void main() async {
   // Auto-connect local ADB on startup
   telephonyController.checkAndConnectAdb();
 
-  // Sync native contacts & call history from Vivo S1 ContentResolver
-  contentService.syncAllFromDevice();
+  // Initialize Hotspot Engine
+  final hotspotService = HotspotService(
+    telephonyController: telephonyController,
+    server: server,
+  );
+  hotspotService.init();
+
+  // If essential permissions are already granted, pre-sync ContentResolver
+  HostPermissionService.areEssentialPermissionsGranted().then((granted) {
+    if (granted) {
+      contentService.syncAllFromDevice();
+    }
+  });
 
   runApp(PtaHostApp(
     server: server,
     monitor: monitor,
     telemetry: telemetry,
     telephonyController: telephonyController,
+    hotspotService: hotspotService,
   ));
 }
 
@@ -38,6 +53,7 @@ class PtaHostApp extends StatelessWidget {
   final TelephonyMonitor monitor;
   final TelemetryService telemetry;
   final TelephonyController telephonyController;
+  final HotspotService hotspotService;
 
   const PtaHostApp({
     super.key,
@@ -45,6 +61,7 @@ class PtaHostApp extends StatelessWidget {
     required this.monitor,
     required this.telemetry,
     required this.telephonyController,
+    required this.hotspotService,
   });
 
   @override
@@ -67,6 +84,7 @@ class PtaHostApp extends StatelessWidget {
         monitor: monitor,
         telemetry: telemetry,
         telephonyController: telephonyController,
+        hotspotService: hotspotService,
       ),
     );
   }
@@ -77,6 +95,7 @@ class HostMainNavigation extends StatefulWidget {
   final TelephonyMonitor monitor;
   final TelemetryService telemetry;
   final TelephonyController telephonyController;
+  final HotspotService hotspotService;
 
   const HostMainNavigation({
     super.key,
@@ -84,6 +103,7 @@ class HostMainNavigation extends StatefulWidget {
     required this.monitor,
     required this.telemetry,
     required this.telephonyController,
+    required this.hotspotService,
   });
 
   @override
@@ -94,12 +114,33 @@ class _HostMainNavigationState extends State<HostMainNavigation> {
   int _currentIndex = 0;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      _checkStartupPermissions();
+    });
+  }
+
+  Future<void> _checkStartupPermissions() async {
+    final allGranted = await HostPermissionService.areEssentialPermissionsGranted();
+    if (!allGranted && mounted) {
+      await HostPermissionSheet.show(
+        context,
+        onGranted: () {
+          widget.server.contentService?.syncAllFromDevice();
+        },
+      );
+    }
+  }
+
+  @override
   Widget build(BuildContext context) {
     final screens = [
       DashboardScreen(
         server: widget.server,
         monitor: widget.monitor,
         telemetry: widget.telemetry,
+        hotspotService: widget.hotspotService,
       ),
       LiveActivityScreen(
         server: widget.server,

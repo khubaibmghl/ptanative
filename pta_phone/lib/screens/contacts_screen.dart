@@ -5,6 +5,7 @@ import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
 import '../theme/liquid_glass_theme.dart';
+import '../widgets/contact_avatar_widget.dart';
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -94,15 +95,6 @@ class _ContactsScreenState extends State<ContactsScreen> {
       isScrollControlled: true,
       builder: (ctx) => _ContactDetailSheet(contact: contact),
     );
-  }
-
-  String _getInitials(String name) {
-    if (name.isEmpty) return '?';
-    final parts = name.trim().split(RegExp(r'\s+'));
-    if (parts.length >= 2) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
-    }
-    return name.substring(0, 1).toUpperCase();
   }
 
   @override
@@ -224,24 +216,16 @@ class _ContactsScreenState extends State<ContactsScreen> {
                               delegate: SliverChildBuilderDelegate(
                                 (context, index) {
                                   final contact = contactsInGroup[index];
-                                  final initials = _getInitials(contact.displayName);
 
                                   return Column(
                                     children: [
                                       ListTile(
                                         contentPadding: const EdgeInsets.symmetric(horizontal: 16),
-                                        leading: Container(
-                                          width: 40,
-                                          height: 40,
-                                          decoration: const BoxDecoration(
-                                            color: Color(0xFF8B9CBF),
-                                            shape: BoxShape.circle,
-                                          ),
-                                          alignment: Alignment.center,
-                                          child: Text(
-                                            initials,
-                                            style: const TextStyle(color: Colors.white, fontSize: 15, fontWeight: FontWeight.bold),
-                                          ),
+                                        leading: ContactAvatarWidget(
+                                          contactId: contact.id,
+                                          displayName: contact.displayName,
+                                          size: 40,
+                                          fontSize: 15,
                                         ),
                                         title: Text(
                                           contact.displayName,
@@ -315,10 +299,6 @@ class _ContactDetailSheet extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final initial = contact.displayName.isNotEmpty
-        ? contact.displayName.substring(0, 1).toUpperCase()
-        : '?';
-
     return Container(
       padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 40),
       decoration: const BoxDecoration(
@@ -337,18 +317,11 @@ class _ContactDetailSheet extends StatelessWidget {
             ),
           ),
           const SizedBox(height: 20),
-          Container(
-            width: 68,
-            height: 68,
-            decoration: const BoxDecoration(
-              color: Color(0xFF7A8DBE),
-              shape: BoxShape.circle,
-            ),
-            alignment: Alignment.center,
-            child: Text(
-              initial,
-              style: const TextStyle(color: Colors.white, fontSize: 28, fontWeight: FontWeight.bold),
-            ),
+          ContactAvatarWidget(
+            contactId: contact.id,
+            displayName: contact.displayName,
+            size: 68,
+            fontSize: 28,
           ),
           const SizedBox(height: 12),
           Text(

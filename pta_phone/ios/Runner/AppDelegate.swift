@@ -7,6 +7,9 @@ import AVFoundation
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
   private var nativeChannel: FlutterMethodChannel?
   private var silentAudioPlayer: AVAudioPlayer?
+  private var audioPlayer: AVPlayer?
+  private var audioPlayerChannel: FlutterMethodChannel?
+  private var audioTimeObserver: Any?
 
   override func application(
     _ application: UIApplication,
@@ -28,6 +31,18 @@ import AVFoundation
       name: AVAudioSession.interruptionNotification,
       object: AVAudioSession.sharedInstance()
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleMediaServicesReset(_:)),
+      name: AVAudioSession.mediaServicesWereResetNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleMediaServicesLost(_:)),
+      name: AVAudioSession.mediaServicesWereLostNotification,
+      object: nil
+    )
   }
 
   @objc private func handleAudioInterruption(_ notification: Notification) {
@@ -41,6 +56,16 @@ import AVFoundation
       print("[AppDelegate] Audio Interruption Ended -> Resuming background keep-alive...")
       ensureKeepAlivePlaying()
     }
+  }
+
+  @objc private func handleMediaServicesReset(_ notification: Notification) {
+    print("[AppDelegate] Media Services Were Reset -> Recreating audio keep-alive player...")
+    silentAudioPlayer = nil
+    ensureKeepAlivePlaying()
+  }
+
+  @objc private func handleMediaServicesLost(_ notification: Notification) {
+    print("[AppDelegate] Media Services Were Lost...")
   }
 
   private func ensureKeepAlivePlaying() {
@@ -101,9 +126,128 @@ import AVFoundation
     let rootVc = window?.rootViewController ?? UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController
     if let controller = rootVc as? FlutterViewController {
       nativeChannel = FlutterMethodChannel(name: "com.pta.phone/native_intents", binaryMessenger: controller.binaryMessenger)
+      setupAudioPlayerChannel(controller: controller)
+      nativeChannel?.setMethodCallHandler { [weak self] (call, result) in
+        if call.method == "getPendingDialIntent" {
+          let pending = self?.pendingDialNumber
+          self?.pendingDialNumber = nil
+          result(pending)
+        } else {
+          result(FlutterMethodNotImplemented)
+        }
+      }
+      if let pending = pendingDialNumber {
+        pendingDialNumber = nil
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+          self.nativeChannel?.invokeMethod("onNativeDialIntent", arguments: ["number": pending])
+        }
+      }
       return nativeChannel
     }
     return nil
+  }
+
+  private func setupAudioPlayerChannel(controller: FlutterViewController) {
+    if audioPlayerChannel != nil { return }
+    audioPlayerChannel = FlutterMethodChannel(name: "com.pta.phone/audio_player", binaryMessenger: controller.binaryMessenger)
+    audioPlayerChannel?.setMethodCallHandler { [weak self] (call, result) in
+      guard let self = self else { return }
+      switch call.method {
+      case "playUrl":
+        guard let args = call.arguments as? [String: Any],
+              let urlString = args["url"] as? String,
+              let url = URL(string: urlString) else {
+          result(FlutterError(code: "INVALID_ARGS", message: "URL required", details: nil))
+          return
+        }
+        self.playAudio(url: url)
+        result(true)
+
+      case "pause":
+        self.audioPlayer?.pause()
+        self.audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false])
+        result(true)
+
+      case "resume":
+        self.audioPlayer?.play()
+        self.audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": true])
+        result(true)
+
+      case "stop":
+        self.stopAudio()
+        result(true)
+
+      case "seek":
+        if let args = call.arguments as? [String: Any],
+           let seconds = args["seconds"] as? Double {
+          let time = CMTime(seconds: seconds, preferredTimescale: 600)
+          self.audioPlayer?.seek(to: time)
+        }
+        result(true)
+
+      default:
+        result(FlutterMethodNotImplemented)
+      }
+    }
+  }
+
+  private func playAudio(url: URL) {
+    stopAudio()
+    do {
+      try AVAudioSession.sharedInstance().setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try AVAudioSession.sharedInstance().setActive(true)
+    } catch {
+      print("[AppDelegate] Audio Session playback error: \(error)")
+    }
+
+    let item = AVPlayerItem(url: url)
+    audioPlayer = AVPlayer(playerItem: item)
+
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(playerItemDidReachEnd),
+      name: .AVPlayerItemDidPlayToEndTime,
+      object: item
+    )
+
+    let interval = CMTime(seconds: 0.25, preferredTimescale: 600)
+    audioTimeObserver = audioPlayer?.addPeriodicTimeObserver(forInterval: interval, queue: .main) { [weak self] time in
+      guard let self = self else { return }
+      let pos = CMTimeGetSeconds(time)
+      let dur = CMTimeGetSeconds(self.audioPlayer?.currentItem?.duration ?? .zero)
+      self.audioPlayerChannel?.invokeMethod("onPositionChanged", arguments: [
+        "position": pos.isFinite ? pos : 0.0,
+        "duration": dur.isFinite ? dur : 0.0
+      ])
+    }
+
+    audioPlayer?.play()
+    audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": true])
+  }
+
+  private func stopAudio() {
+    if let obs = audioTimeObserver {
+      audioPlayer?.removeTimeObserver(obs)
+      audioTimeObserver = nil
+    }
+    NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
+    audioPlayer?.pause()
+    audioPlayer = nil
+    audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false])
+  }
+
+  @objc private func playerItemDidReachEnd(notification: Notification) {
+    audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false, "completed": true])
+  }
+
+  private var pendingDialNumber: String?
+
+  private func sendDialIntent(_ number: String) {
+    if let channel = getNativeChannel() {
+      channel.invokeMethod("onNativeDialIntent", arguments: ["number": number])
+    } else {
+      pendingDialNumber = number
+    }
   }
 
   override func application(
@@ -114,11 +258,11 @@ import AVFoundation
     if let intent = userActivity.interaction?.intent as? INStartCallIntent,
        let person = intent.contacts?.first,
        let handle = person.personHandle?.value {
-      getNativeChannel()?.invokeMethod("onNativeDialIntent", arguments: ["number": handle])
+      sendDialIntent(handle)
     } else if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent,
               let person = intent.contacts?.first,
               let handle = person.personHandle?.value {
-      getNativeChannel()?.invokeMethod("onNativeDialIntent", arguments: ["number": handle])
+      sendDialIntent(handle)
     }
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
   }

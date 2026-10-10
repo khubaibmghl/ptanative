@@ -18,6 +18,7 @@ dependencies:
   flutter_webrtc: ^0.12.4
   url_launcher: ^6.3.0
   shared_preferences: ^2.2.3
+  permission_handler: ^11.3.1
   pta_shared:
     path: ../pta_shared
 

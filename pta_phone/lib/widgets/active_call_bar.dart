@@ -25,8 +25,7 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
   @override
   void initState() {
     super.initState();
-    _seconds = ((DateTime.now().millisecondsSinceEpoch - widget.callInfo.startTime) / 1000).floor();
-    if (_seconds < 0) _seconds = 0;
+    _syncDuration();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
       if (mounted) {
         setState(() {
@@ -34,6 +33,27 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
         });
       }
     });
+  }
+
+  @override
+  void didUpdateWidget(covariant ActiveCallBar oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    if (widget.callInfo.durationSeconds > 0 && widget.callInfo.durationSeconds != _seconds) {
+      setState(() {
+        _seconds = widget.callInfo.durationSeconds;
+      });
+    }
+  }
+
+  void _syncDuration() {
+    if (widget.callInfo.durationSeconds > 0) {
+      _seconds = widget.callInfo.durationSeconds;
+    } else if (widget.callInfo.startTime > 0) {
+      _seconds = ((DateTime.now().millisecondsSinceEpoch - widget.callInfo.startTime) / 1000).floor();
+    } else {
+      _seconds = 0;
+    }
+    if (_seconds < 0) _seconds = 0;
   }
 
   @override

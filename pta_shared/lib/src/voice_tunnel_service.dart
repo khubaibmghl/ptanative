@@ -30,18 +30,6 @@ class VoiceTunnelService {
     'sdpSemantics': 'unified-plan',
   };
 
-  final Map<String, dynamic> _audioConstraints = {
-    'mandatory': {
-      'googEchoCancellation': 'true',
-      'googAutoGainControl': 'true',
-      'googNoiseSuppression': 'true',
-      'googHighpassFilter': 'true',
-      'echoCancellation': 'true',
-      'noiseSuppression': 'true',
-    },
-    'optional': [],
-  };
-
   /// Initialize and start low-latency WebRTC peer connection
   Future<void> startVoiceTunnel({
     required bool isCaller,
@@ -401,5 +389,20 @@ class VoiceTunnelService {
     } catch (e) {
       _log('⚠️ Exception switching audio route to $route: $e');
     }
+  }
+
+  /// Toggle local microphone mute
+  void toggleMute(bool muted) {
+    _log('Mute microphone requested: $muted');
+    if (_localAudioStream != null) {
+      for (final track in _localAudioStream!.getAudioTracks()) {
+        track.enabled = !muted;
+      }
+    }
+  }
+
+  /// Helper to toggle speakerphone output
+  Future<void> setSpeakerphone(bool enable) async {
+    await setAudioOutputRoute(enable ? 'speaker' : 'earpiece');
   }
 }

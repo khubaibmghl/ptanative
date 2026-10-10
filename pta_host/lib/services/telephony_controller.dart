@@ -117,16 +117,109 @@ class TelephonyController {
     } catch (_) {}
   }
 
-  /// In-Call DTMF digit transmission for IVR / Customer helpline calls
-  Future<void> sendDtmf(String digit) async {
+  /// Outgoing SMS Dispatch via native SmsManager or ADB pipeline
+  Future<bool> sendSms(String recipient, String message) async {
+    final clean = recipient.trim();
+    if (clean.isEmpty || message.trim().isEmpty) return false;
+
+    // Tier 1: Native SmsManager via MethodChannel
     try {
-      if (isAdbConnected) {
-        await Process.run('adb', ['-s', adbDeviceId, 'shell', 'input', 'text', digit]);
-      } else {
-        await Process.run('/system/bin/input', ['text', digit]);
+      final ok = await _channel.invokeMethod<bool>('sendSms', {
+        'recipient': clean,
+        'message': message,
+      });
+      if (ok == true) {
+        debugPrint('[TELEPHONY] SMS sent cleanly to $clean via native SmsManager');
+        return true;
       }
     } catch (e) {
-      debugPrint('[TELEPHONY] DTMF error: $e');
+      debugPrint('[TELEPHONY] Native SMS error: $e');
+    }
+
+    // Tier 2: ADB Shell SMS dispatch
+    try {
+      if (isAdbConnected) {
+        await Process.run('adb', [
+          '-s',
+          adbDeviceId,
+          'shell',
+          'service',
+          'call',
+          'isms',
+          '7',
+          'i32',
+          '0',
+          's16',
+          'com.android.mms',
+          's16',
+          clean,
+          's16',
+          'null',
+          's16',
+          message,
+          's16',
+          'null',
+          's16',
+          'null',
+        ]);
+        return true;
+      }
+    } catch (e) {
+      debugPrint('[TELEPHONY] ADB SMS error: $e');
+    }
+
+    return false;
+  }
+
+  /// Checks if Android Wi-Fi AP / Hotspot is active
+  Future<bool> isHotspotActive() async {
+    try {
+      final active = await _channel.invokeMethod<bool>('isHotspotActive');
+      return active ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Opens Android Tethering & Hotspot Settings
+  Future<bool> openTetherSettings() async {
+    try {
+      final res = await _channel.invokeMethod<bool>('openTetherSettings');
+      return res ?? false;
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /// Transmits DTMF dual-tone keypress during an active call
+  Future<bool> sendDtmf(String digit) async {
+    try {
+      if (isAdbConnected) {
+        final code = switch (digit) {
+          '0' => '7',
+          '1' => '8',
+          '2' => '9',
+          '3' => '10',
+          '4' => '11',
+          '5' => '12',
+          '6' => '13',
+          '7' => '14',
+          '8' => '15',
+          '9' => '16',
+          '*' => '17',
+          '#' => '18',
+          _ => null,
+        };
+        if (code != null) {
+          await Process.run('adb', ['-s', adbDeviceId, 'shell', 'input', 'keyevent', code]);
+          return true;
+        }
+      }
+      final res = await _channel.invokeMethod<bool>('sendDtmf', {'digit': digit});
+      return res ?? false;
+    } catch (e) {
+      debugPrint('[TELEPHONY] sendDtmf error: $e');
+      return false;
     }
   }
 }

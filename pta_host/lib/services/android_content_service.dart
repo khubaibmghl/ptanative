@@ -5,6 +5,7 @@ import 'package:permission_handler/permission_handler.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../models/activity_log.dart';
 import 'relay_server.dart';
+import 'host_permission_service.dart';
 
 class AndroidContentService {
   final RelayServer server;
@@ -35,10 +36,7 @@ class AndroidContentService {
 
   Future<void> _requestPermissions() async {
     try {
-      await [
-        Permission.contacts,
-        Permission.phone,
-      ].request();
+      await HostPermissionService.requestAll();
     } catch (_) {}
   }
 
@@ -68,6 +66,7 @@ class AndroidContentService {
         final model = ContactModel(
           id: c.id,
           displayName: c.displayName.trim().isNotEmpty ? c.displayName.trim() : phoneItems.first.rawNumber,
+          avatarUrl: '/api/contacts/avatar?id=${c.id}',
           phoneNumbers: phoneItems,
         );
         result.add(model);

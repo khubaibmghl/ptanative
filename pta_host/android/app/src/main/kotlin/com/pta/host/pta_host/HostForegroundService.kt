@@ -6,6 +6,7 @@ import android.app.NotificationManager
 import android.app.Service
 import android.content.Context
 import android.content.Intent
+import android.net.wifi.WifiManager
 import android.os.Build
 import android.os.IBinder
 import android.os.PowerManager
@@ -13,6 +14,7 @@ import androidx.core.app.NotificationCompat
 
 class HostForegroundService : Service() {
     private var wakeLock: PowerManager.WakeLock? = null
+    private var wifiLock: WifiManager.WifiLock? = null
 
     override fun onCreate() {
         super.onCreate()
@@ -23,7 +25,24 @@ class HostForegroundService : Service() {
         try {
             val powerManager = getSystemService(Context.POWER_SERVICE) as PowerManager
             wakeLock = powerManager.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "PTAHost::RelayWakeLock")
+            wakeLock?.setReferenceCounted(false)
             wakeLock?.acquire(24 * 60 * 60 * 1000L) // 24 hours lock
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+
+        try {
+            val wifiManager = applicationContext.getSystemService(Context.WIFI_SERVICE) as? WifiManager
+            if (wifiManager != null) {
+                val wifiMode = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                    WifiManager.WIFI_MODE_FULL_LOW_LATENCY
+                } else {
+                    WifiManager.WIFI_MODE_FULL_HIGH_PERF
+                }
+                wifiLock = wifiManager.createWifiLock(wifiMode, "PTAHost::WifiLock")
+                wifiLock?.setReferenceCounted(false)
+                wifiLock?.acquire()
+            }
         } catch (e: Exception) {
             e.printStackTrace()
         }
@@ -39,6 +58,13 @@ class HostForegroundService : Service() {
                 wakeLock?.release()
             }
         } catch (_: Exception) {}
+
+        try {
+            if (wifiLock?.isHeld == true) {
+                wifiLock?.release()
+            }
+        } catch (_: Exception) {}
+
         super.onDestroy()
     }
 

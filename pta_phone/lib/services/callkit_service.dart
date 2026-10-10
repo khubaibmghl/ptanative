@@ -3,7 +3,6 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
-import 'package:pta_shared/pta_shared.dart';
 
 /// Apple CallKit Bridge for iPhone 15 Pro
 class CallKitService {
@@ -21,6 +20,8 @@ class CallKitService {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
+  String? currentCallId;
+
   Stream<CallEvent?>? get onEvent => FlutterCallkitIncoming.onEvent;
 
   Future<void> showIncomingCall({
@@ -31,6 +32,7 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      currentCallId = validUuid;
       debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting showCallkitIncoming for caller "$callerName" ($handle) [UUID: $validUuid]');
       debugPrint('[CALLKIT_DIAGNOSTIC] 🎙️ CallKit iOS Audio Session settings -> Mode: voiceChat, Active: true, SampleRate: 44100Hz, BufferDuration: 0.005s');
 
@@ -41,6 +43,7 @@ class CallKitService {
         avatar: '',
         handle: handle,
         type: 0, // Audio call
+        normalHandle: 1, // Disable plugin Base64/JSON encryption; store clean phone number
         duration: 35000,
         textAccept: 'Accept',
         textDecline: 'Decline',
@@ -59,7 +62,7 @@ class CallKitService {
         ),
         ios: const IOSParams(
           iconName: 'AppIcon',
-          handleType: 'phoneNumber',
+          handleType: 'number', // Strictly recognized by Swift plugin as CXHandle.HandleType.phoneNumber
           supportsVideo: false,
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
@@ -89,6 +92,7 @@ class CallKitService {
   }) async {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      currentCallId = validUuid;
       debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting startCall for "$callerName" ($handle) [UUID: $validUuid]');
       final params = CallKitParams(
         id: validUuid,
@@ -96,10 +100,11 @@ class CallKitService {
         appName: 'PTA Phone',
         handle: handle,
         type: 0,
+        normalHandle: 1, // Clean telephone number stored in Apple CallKit database
         extra: <String, dynamic>{'number': handle, 'name': callerName},
         ios: const IOSParams(
           iconName: 'AppIcon',
-          handleType: 'phoneNumber',
+          handleType: 'number', // Strictly recognized as CXHandle.HandleType.phoneNumber
           supportsVideo: false,
           maximumCallGroups: 1,
           maximumCallsPerCallGroup: 1,
@@ -114,9 +119,23 @@ class CallKitService {
     }
   }
 
+  /// Informs Apple CallKit CXProvider that the call has been answered/connected
+  Future<void> setCallConnected([String? callId]) async {
+    try {
+      final id = callId ?? currentCallId;
+      if (id != null && id.isNotEmpty) {
+        debugPrint('[CALLKIT_DIAGNOSTIC] 🟢 Setting CallKit call as connected (CXCallConnected) for ID: $id');
+        await FlutterCallkitIncoming.setCallConnected(id);
+      }
+    } catch (e) {
+      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception setting call connected: $e');
+    }
+  }
+
   Future<void> endCall(String callId) async {
     try {
       debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending CallKit call ID: $callId');
+      if (currentCallId == callId) currentCallId = null;
       await FlutterCallkitIncoming.endCall(callId);
     } catch (e) {
       debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending call: $e');
@@ -126,6 +145,7 @@ class CallKitService {
   Future<void> endAllCalls() async {
     try {
       debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending all CallKit active calls and releasing iOS AudioSession');
+      currentCallId = null;
       await FlutterCallkitIncoming.endAllCalls();
     } catch (e) {
       debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending all calls: $e');

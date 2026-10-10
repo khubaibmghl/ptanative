@@ -109,12 +109,14 @@ class RelayMessage {
   static RelayMessage callDisconnected({
     required String number,
     required int duration,
+    bool isMissed = false,
   }) {
     return RelayMessage(
       type: 'CALL_DISCONNECTED',
       data: {
         'number': number,
         'duration': duration,
+        'isMissed': isMissed,
       },
     );
   }
@@ -162,6 +164,34 @@ class RelayMessage {
     );
   }
 
+  static RelayMessage callTick({
+    required int duration,
+    required String formatted,
+  }) {
+    return RelayMessage(
+      type: 'CALL_TICK',
+      data: {
+        'duration': duration,
+        'formatted': formatted,
+      },
+    );
+  }
+
+  static RelayMessage smsReceived({
+    required String sender,
+    required String body,
+    int? timestamp,
+  }) {
+    return RelayMessage(
+      type: 'SMS_RECEIVED',
+      data: {
+        'sender': sender,
+        'body': body,
+        'timestamp': timestamp ?? DateTime.now().millisecondsSinceEpoch,
+      },
+    );
+  }
+
   static RelayMessage webrtcOffer(String sdp) {
     return RelayMessage(
       type: 'WEBRTC_OFFER',
@@ -182,4 +212,71 @@ class RelayMessage {
       data: candidate,
     );
   }
+
+  static RelayMessage actionSendSms({
+    required String recipient,
+    required String message,
+  }) {
+    return RelayMessage(
+      type: 'ACTION_SEND_SMS',
+      data: {
+        'recipient': recipient,
+        'message': message,
+      },
+    );
+  }
+
+  static RelayMessage smsSentStatus({
+    required bool success,
+    required String recipient,
+    String? error,
+  }) {
+    return RelayMessage(
+      type: 'SMS_SENT_STATUS',
+      data: {
+        'success': success,
+        'recipient': recipient,
+        'error': error,
+      },
+    );
+  }
+
+  static RelayMessage encryptedFrame(String ciphertext) {
+    return RelayMessage(
+      type: 'ENCRYPTED_FRAME',
+      data: {'ciphertext': ciphertext},
+    );
+  }
+}
+
+class SavedConnection {
+  final String id;
+  final String name;
+  final String ip;
+  final int port;
+  final bool isDefaultHotspot;
+
+  SavedConnection({
+    required this.id,
+    required this.name,
+    required this.ip,
+    this.port = 8080,
+    this.isDefaultHotspot = false,
+  });
+
+  Map<String, dynamic> toJson() => {
+        'id': id,
+        'name': name,
+        'ip': ip,
+        'port': port,
+        'isDefaultHotspot': isDefaultHotspot,
+      };
+
+  factory SavedConnection.fromJson(Map<String, dynamic> json) => SavedConnection(
+        id: json['id'] as String? ?? '',
+        name: json['name'] as String? ?? 'Host',
+        ip: json['ip'] as String? ?? '192.168.43.1',
+        port: json['port'] as int? ?? 8080,
+        isDefaultHotspot: json['isDefaultHotspot'] as bool? ?? false,
+      );
 }

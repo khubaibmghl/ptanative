@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
+import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
 import '../theme/liquid_glass_theme.dart';
@@ -13,7 +14,25 @@ class KeypadScreen extends StatefulWidget {
 
 class _KeypadScreenState extends State<KeypadScreen> {
   String _digits = '';
+  String? _clipboardNumber;
   List<ContactMatchModel> _matches = [];
+
+  @override
+  void initState() {
+    super.initState();
+    _checkClipboardForNumber();
+  }
+
+  Future<void> _checkClipboardForNumber() async {
+    try {
+      final data = await Clipboard.getData(Clipboard.kTextPlain);
+      final text = data?.text?.trim() ?? '';
+      final digits = text.replaceAll(RegExp(r'\D'), '');
+      if (digits.length >= 7 && digits.length <= 15 && text != _digits) {
+        if (mounted) setState(() => _clipboardNumber = text);
+      }
+    } catch (_) {}
+  }
 
   void _onDigitPressed(String char) {
     HapticFeedback.lightImpact();
@@ -49,19 +68,29 @@ class _KeypadScreenState extends State<KeypadScreen> {
 
     final List<ContactMatchModel> results = [];
 
-    // Search contacts by number or name
-    final contacts = await DatabaseHelper.instance.searchContacts(_digits);
-    for (final c in contacts) {
-      results.add(ContactMatchModel(
-        name: c.displayName,
-        number: c.primaryNumber,
-      ));
+    // Search contacts by number, name, or T9 keypad sequence
+    final allContacts = await DatabaseHelper.instance.getContacts();
+    for (final c in allContacts) {
+      final matchesNumber = c.phoneNumbers.any((p) => p.rawNumber.contains(_digits) || p.normalizedNumber.contains(_digits));
+      final matchesName = c.displayName.toLowerCase().contains(_digits.toLowerCase());
+      final matchesT9 = PhoneNumberNormalizer.matchesT9(c.displayName, _digits);
+
+      if (matchesNumber || matchesName || matchesT9) {
+        results.add(ContactMatchModel(
+          name: c.displayName,
+          number: c.primaryNumber,
+        ));
+      }
     }
 
     // Search recents if needed
     final logs = await DatabaseHelper.instance.getCallLogs(missedOnly: false);
     for (final log in logs) {
-      if (log.remoteNumber.contains(_digits) || log.callerName.toLowerCase().contains(_digits.toLowerCase())) {
+      final matchesNum = log.remoteNumber.contains(_digits);
+      final matchesCaller = log.callerName.toLowerCase().contains(_digits.toLowerCase());
+      final matchesT9Caller = PhoneNumberNormalizer.matchesT9(log.callerName, _digits);
+
+      if (matchesNum || matchesCaller || matchesT9Caller) {
         if (!results.any((r) => r.number == log.remoteNumber)) {
           results.add(ContactMatchModel(
             name: log.callerName.isNotEmpty ? log.callerName : log.remoteNumber,
@@ -111,6 +140,38 @@ class _KeypadScreenState extends State<KeypadScreen> {
         ),
 
         const SizedBox(height: 8),
+
+        if (_clipboardNumber != null && _digits.isEmpty)
+          GestureDetector(
+            onTap: () {
+              HapticFeedback.lightImpact();
+              setState(() {
+                _digits = _clipboardNumber!;
+                _clipboardNumber = null;
+              });
+              _lookupMatches();
+            },
+            child: Container(
+              margin: const EdgeInsets.only(bottom: 6),
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.15),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.3)),
+              ),
+              child: Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  const Icon(Icons.paste_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
+                  const SizedBox(width: 6),
+                  Text(
+                    'Paste $_clipboardNumber',
+                    style: const TextStyle(color: LiquidGlassTheme.iosBlue, fontSize: 12, fontWeight: FontWeight.w600),
+                  ),
+                ],
+              ),
+            ),
+          ),
 
         // Centered Big Dialed Digits Display
         SizedBox(

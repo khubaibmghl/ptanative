@@ -1,8 +1,8 @@
-﻿import 'package:flutter/material.dart';
-import 'package:permission_handler/permission_handler.dart';
+import 'package:flutter/material.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import '../services/relay_server.dart';
 import '../services/telephony_controller.dart';
+import '../widgets/host_permission_sheet.dart';
 
 class SettingsScreen extends StatefulWidget {
   final RelayServer server;
@@ -41,16 +41,11 @@ class _SettingsScreenState extends State<SettingsScreen> {
   }
 
   Future<void> _requestPermissions() async {
-    await [
-      Permission.phone,
-      Permission.contacts,
-      Permission.sms,
-      Permission.ignoreBatteryOptimizations,
-    ].request();
-
-    if (!mounted) return;
-    ScaffoldMessenger.of(context).showSnackBar(
-      const SnackBar(content: Text('Permissions evaluated. Check Android Settings for details.')),
+    await HostPermissionSheet.show(
+      context,
+      onGranted: () {
+        widget.server.contentService?.syncAllFromDevice();
+      },
     );
   }
 

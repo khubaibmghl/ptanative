@@ -1,19 +1,23 @@
 import 'package:flutter/material.dart';
+import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../services/relay_server.dart';
 import '../services/telephony_monitor.dart';
 import '../services/telemetry_service.dart';
+import '../services/hotspot_service.dart';
 
 class DashboardScreen extends StatefulWidget {
   final RelayServer server;
   final TelephonyMonitor monitor;
   final TelemetryService telemetry;
+  final HotspotService? hotspotService;
 
   const DashboardScreen({
     super.key,
     required this.server,
     required this.monitor,
     required this.telemetry,
+    this.hotspotService,
   });
 
   @override
@@ -22,14 +26,35 @@ class DashboardScreen extends StatefulWidget {
 
 class _DashboardScreenState extends State<DashboardScreen> {
   bool _isRelayRunning = false;
+  bool _isBatteryOptIgnored = true;
 
   @override
   void initState() {
     super.initState();
     _isRelayRunning = widget.server.isRunning;
+    _checkBatteryOptimization();
     Stream.periodic(const Duration(seconds: 1)).listen((_) {
       if (mounted) setState(() {});
     });
+  }
+
+  Future<void> _checkBatteryOptimization() async {
+    try {
+      final bool? ignored = await const MethodChannel('com.pta.host/telephony_methods')
+          .invokeMethod<bool>('isBatteryOptimizationIgnored');
+      if (mounted && ignored != null) {
+        setState(() => _isBatteryOptIgnored = ignored);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> _requestBatteryOptimization() async {
+    try {
+      await const MethodChannel('com.pta.host/telephony_methods')
+          .invokeMethod('requestBatteryOptimization');
+      await Future.delayed(const Duration(seconds: 1));
+      _checkBatteryOptimization();
+    } catch (_) {}
   }
 
   Future<void> _toggleRelay() async {
@@ -143,7 +168,67 @@ class _DashboardScreenState extends State<DashboardScreen> {
               ),
             ),
 
-            const SizedBox(height: 16),
+            const SizedBox(height: 12),
+
+            // 1.5 PERSISTENCE & DEEP SLEEP PROTECTION CARD
+            Card(
+              color: _isBatteryOptIgnored ? const Color(0xFF1E281E) : const Color(0xFF2E2214),
+              shape: RoundedRectangleBorder(
+                borderRadius: BorderRadius.circular(18),
+                side: BorderSide(
+                  color: _isBatteryOptIgnored ? Colors.green.withValues(alpha: 0.4) : Colors.orange.withValues(alpha: 0.6),
+                ),
+              ),
+              child: Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                child: Row(
+                  children: [
+                    Icon(
+                      _isBatteryOptIgnored ? Icons.shield_rounded : Icons.warning_amber_rounded,
+                      color: _isBatteryOptIgnored ? Colors.greenAccent : Colors.orangeAccent,
+                      size: 26,
+                    ),
+                    const SizedBox(width: 12),
+                    Expanded(
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            _isBatteryOptIgnored ? 'Screen-Off Sleep Protection: Active' : 'Doze Mode Whitelist Needed',
+                            style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white),
+                          ),
+                          const SizedBox(height: 2),
+                          Text(
+                            _isBatteryOptIgnored
+                                ? 'Cpu WakeLock & WifiLock active. Hotspot won\'t drop packets.'
+                                : 'Tap to whitelist PTA Host so Vivo doesn\'t sleep the Wi-Fi socket.',
+                            style: TextStyle(fontSize: 11, color: Colors.white.withValues(alpha: 0.7)),
+                          ),
+                        ],
+                      ),
+                    ),
+                    if (!_isBatteryOptIgnored)
+                      FilledButton.tonal(
+                        style: FilledButton.styleFrom(
+                          backgroundColor: Colors.orangeAccent,
+                          foregroundColor: Colors.black,
+                          padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                          visualDensity: VisualDensity.compact,
+                        ),
+                        onPressed: _requestBatteryOptimization,
+                        child: const Text('Allow', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12)),
+                      ),
+                  ],
+                ),
+              ),
+            ),
+
+            const SizedBox(height: 12),
+
+            // 1.5. VIVO HOTSPOT AUTO-TETHERING ENGINE CARD
+            _buildHotspotCard(),
+
+            const SizedBox(height: 12),
 
             // 2. ACTIVE CALL CARD
             if (inCall)
@@ -274,6 +359,34 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 ),
               ],
             ),
+
+            const SizedBox(height: 12),
+
+            // 5. VIVO S1 SCREEN-OFF PERSISTENCE CHECKLIST
+            Card(
+              color: Colors.white.withValues(alpha: 0.04),
+              shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+              child: const Padding(
+                padding: EdgeInsets.all(14),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Icon(Icons.lightbulb_outline, size: 18, color: Colors.amberAccent),
+                        SizedBox(width: 8),
+                        Text('Vivo S1 Long Screen-Off Checklist', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13, color: Colors.white)),
+                      ],
+                    ),
+                    SizedBox(height: 6),
+                    Text(
+                      '1. Personal Hotspot ➔ Auto-turn off ➔ Set to "Never".\n2. Settings ➔ Battery ➔ High background power consumption ➔ PTA Host ➔ Allow.\n3. Settings ➔ Apps ➔ Autostart ➔ PTA Host ➔ On.',
+                      style: TextStyle(fontSize: 11.5, color: Colors.white70, height: 1.45),
+                    ),
+                  ],
+                ),
+              ),
+            ),
           ],
         ),
       ),
@@ -307,6 +420,100 @@ class _DashboardScreenState extends State<DashboardScreen> {
                   Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade600), maxLines: 1),
                 ],
               ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _buildHotspotCard() {
+    final active = widget.hotspotService?.isHotspotActive ?? false;
+    final autoTether = widget.hotspotService?.autoTetherEnabled ?? true;
+
+    return Card(
+      color: active ? const Color(0xFF1B3B2B) : const Color(0xFF262626),
+      shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(20)),
+      child: Padding(
+        padding: const EdgeInsets.all(16.0),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                CircleAvatar(
+                  backgroundColor: active ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2),
+                  child: Icon(
+                    Icons.wifi_tethering_rounded,
+                    color: active ? Colors.greenAccent : Colors.orangeAccent,
+                  ),
+                ),
+                const SizedBox(width: 14),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Row(
+                        children: [
+                          const Text(
+                            'Vivo Hotspot Mesh',
+                            style: TextStyle(fontWeight: FontWeight.bold, fontSize: 16, color: Colors.white),
+                          ),
+                          const SizedBox(width: 8),
+                          Container(
+                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                            decoration: BoxDecoration(
+                              color: active ? Colors.green.withValues(alpha: 0.2) : Colors.orange.withValues(alpha: 0.2),
+                              borderRadius: BorderRadius.circular(6),
+                            ),
+                            child: Text(
+                              active ? 'BROADCASTING' : 'INACTIVE',
+                              style: TextStyle(
+                                color: active ? Colors.greenAccent : Colors.orangeAccent,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
+                            ),
+                          ),
+                        ],
+                      ),
+                      const SizedBox(height: 2),
+                      Text(
+                        active ? 'AP Gateway: 192.168.43.1 • iPhone Auto-Sync Ready' : 'Hotspot is off. Tap below to start tethering.',
+                        style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.7)),
+                      ),
+                    ],
+                  ),
+                ),
+              ],
+            ),
+            const SizedBox(height: 12),
+            Row(
+              mainAxisAlignment: MainAxisAlignment.spaceBetween,
+              children: [
+                Row(
+                  children: [
+                    Switch(
+                      value: autoTether,
+                      onChanged: (val) {
+                        widget.hotspotService?.toggleAutoTether(val);
+                        setState(() {});
+                      },
+                    ),
+                    const SizedBox(width: 6),
+                    const Text('Auto-Tether Keep-Alive', style: TextStyle(color: Colors.white70, fontSize: 12)),
+                  ],
+                ),
+                FilledButton.tonal(
+                  style: FilledButton.styleFrom(
+                    backgroundColor: active ? Colors.green.shade800 : Colors.orange.shade800,
+                    foregroundColor: Colors.white,
+                  ),
+                  onPressed: () async {
+                    await widget.hotspotService?.triggerStartHotspot();
+                  },
+                  child: Text(active ? 'Hotspot Settings' : 'Start Hotspot'),
+                ),
+              ],
             ),
           ],
         ),

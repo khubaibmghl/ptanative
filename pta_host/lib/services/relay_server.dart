@@ -11,6 +11,8 @@ import 'package:web_socket_channel/web_socket_channel.dart';
 import '../models/activity_log.dart';
 import 'telephony_controller.dart';
 import 'android_content_service.dart';
+import 'vivo_recording_service.dart';
+import 'package:fast_contacts/fast_contacts.dart';
 
 class RelayServer {
   static const int port = 8080;
@@ -18,9 +20,9 @@ class RelayServer {
   HttpServer? _server;
   RawDatagramSocket? _udpSocket;
   final TelephonyController telephonyController;
+  final VoiceTunnelService voiceTunnel = VoiceTunnelService();
   AndroidContentService? contentService;
   dynamic telephonyMonitor;
-  final voiceTunnel = VoiceTunnelService();
 
   final List<WebSocketChannel> _connectedSockets = [];
   final List<ActivityLog> activityLogs = [];
@@ -59,32 +61,14 @@ class RelayServer {
   Timer? _idleTimer;
   int _lastDisconnectTime = 0;
   bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
-  static const _telephonyChannel = MethodChannel('com.pta.host/telephony_methods');
 
-  void startVoiceTunnel() {
-    logEvent('Starting Voice Tunnel', 'Initiating WebRTC Audio Stream with iPhone', ActivityType.info);
-    try {
-      _telephonyChannel.invokeMethod('enableAudioRouting', {'enable': true});
-    } catch (_) {}
-
-    voiceTunnel.startVoiceTunnel(
-      isCaller: true,
-      sendSignaling: (msg) {
-        broadcast(msg);
-      },
-      logCallback: (msg) {
-        logEvent('Voice Tunnel', msg, ActivityType.info);
-      },
-    );
-  }
-
-  void stopVoiceTunnel() {
-    logEvent('Stopping Voice Tunnel', 'Closing WebRTC Audio Stream', ActivityType.info);
-    try {
-      _telephonyChannel.invokeMethod('enableAudioRouting', {'enable': false});
-    } catch (_) {}
-
-    voiceTunnel.closeVoiceTunnel();
+  void handleIncomingSms(String sender, String body, int timestamp) {
+    logEvent('SMS Received', 'From $sender: ${body.length > 35 ? "${body.substring(0, 35)}..." : body}', ActivityType.sms);
+    broadcast(RelayMessage.smsReceived(
+      sender: sender,
+      body: body,
+      timestamp: timestamp,
+    ));
   }
 
   /// Starts the embedded HTTP & WebSocket server on 0.0.0.0:8080 and UDP discovery on 8081
@@ -232,8 +216,25 @@ class RelayServer {
 
     if (isCloudConnected && _cloudSocket != null) {
       try {
+        final cipher = E2eeCipher.fromKey(pairingKey);
+        final enc = cipher.encrypt(jsonStr);
+        _cloudSocket!.sink.add(RelayMessage.encryptedFrame(enc).toJsonString());
+      } catch (_) {
         _cloudSocket!.sink.add(jsonStr);
-      } catch (_) {}
+      }
+    }
+
+    // Auto-manage WebRTC Voice Tunnel on call events
+    if (msg.type == 'CALL_ACTIVE') {
+      debugPrint('[VOICE_TUNNEL] Active call confirmed. Starting WebRTC voice tunnel on host...');
+      voiceTunnel.startVoiceTunnel(
+        isCaller: false,
+        sendSignaling: (sMsg) => broadcast(sMsg),
+        logCallback: (txt) => debugPrint('[HOST_WEBRTC] $txt'),
+      );
+    } else if (msg.type == 'CALL_DISCONNECTED') {
+      debugPrint('[VOICE_TUNNEL] Call disconnected. Teardown WebRTC voice tunnel on host...');
+      voiceTunnel.closeVoiceTunnel();
     }
   }
 
@@ -306,7 +307,18 @@ class RelayServer {
 
   void _handleIncomingSocketMessage(String rawJson) {
     try {
-      final msg = RelayMessage.fromJsonString(rawJson);
+      var msg = RelayMessage.fromJsonString(rawJson);
+      if (msg.type == 'ENCRYPTED_FRAME') {
+        final cipher = E2eeCipher.fromKey(pairingKey);
+        final dec = cipher.decrypt(msg.data['ciphertext']?.toString() ?? '');
+        if (dec != null) {
+          msg = RelayMessage.fromJsonString(dec);
+        } else {
+          debugPrint('[E2EE] Could not decrypt incoming cloud frame (key mismatch)');
+          return;
+        }
+      }
+
       switch (msg.type) {
         case 'ACTION_DIAL':
           final num = msg.data['number']?.toString() ?? '';
@@ -323,11 +335,21 @@ class RelayServer {
         case 'ACTION_HANGUP':
           logEvent('Hangup Request', 'Call dropped from iPhone', ActivityType.call);
           telephonyController.hangupCall();
+          voiceTunnel.closeVoiceTunnel();
           break;
         case 'ACTION_DTMF':
           final digit = msg.data['digit']?.toString() ?? '';
           logEvent('DTMF Keypress', 'Transmitted digit $digit', ActivityType.info);
           telephonyController.sendDtmf(digit);
+          break;
+        case 'ACTION_SEND_SMS':
+          final recipient = msg.data['recipient']?.toString() ?? '';
+          final message = msg.data['message']?.toString() ?? '';
+          logEvent('Outgoing SMS', 'Sending SMS to $recipient: $message', ActivityType.info);
+          telephonyController.sendSms(recipient, message).then((ok) {
+            broadcast(RelayMessage.smsSentStatus(success: ok, recipient: recipient));
+            logEvent('SMS Delivery', ok ? 'Dispatched successfully' : 'Failed to send', ok ? ActivityType.success : ActivityType.call);
+          });
           break;
         case 'WEBRTC_OFFER':
         case 'WEBRTC_ANSWER':
@@ -409,7 +431,7 @@ class RelayServer {
 
     // 6. History
   if (path == 'api/history') {
-    if (cachedCallHistory.isEmpty && contentService != null) {
+    if (contentService != null) {
       await contentService!.fetchCallHistory();
     }
     final list = cachedCallHistory.map((c) => c.toJson()).toList();
@@ -423,6 +445,117 @@ class RelayServer {
     }
     final list = cachedContacts.map((c) => c.toJson()).toList();
     return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
+  }
+
+  // 8. Call Recordings Listing
+  if (path == 'api/recordings') {
+    final number = request.url.queryParameters['number'] ?? '';
+    List<String> contactNames = [];
+    if (number.isNotEmpty) {
+      for (final c in cachedContacts) {
+        if (c.matchesNumber(number)) {
+          contactNames.add(c.displayName);
+        }
+      }
+    }
+    final recordings = await VivoRecordingService.instance.getRecordingsForNumber(
+      number,
+      contactNames: contactNames,
+    );
+    final list = recordings.map((r) => r.toJson()).toList();
+    return Response.ok(jsonEncode(list), headers: {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+    });
+  }
+
+  // 9. Call Recording Audio Streaming / Download
+  if (path == 'api/recordings/audio') {
+    final filename = request.url.queryParameters['file'] ?? '';
+    final file = VivoRecordingService.instance.getRecordingFile(filename);
+    if (file == null || !file.existsSync()) {
+      return Response.notFound('Audio file not found');
+    }
+
+    final ext = filename.split('.').last.toLowerCase();
+    String contentType = 'audio/mpeg';
+    if (ext == 'm4a' || ext == 'mp4' || ext == 'aac') {
+      contentType = 'audio/mp4';
+    } else if (ext == 'amr') {
+      contentType = 'audio/amr';
+    } else if (ext == 'wav') {
+      contentType = 'audio/wav';
+    } else if (ext == 'ogg') {
+      contentType = 'audio/ogg';
+    }
+
+    final length = file.lengthSync();
+    return Response.ok(
+      file.openRead(),
+      headers: {
+        'content-type': contentType,
+        'content-length': length.toString(),
+        'accept-ranges': 'bytes',
+        'access-control-allow-origin': '*',
+        'content-disposition': 'inline; filename="$filename"',
+      },
+    );
+  }
+
+  // 10. Outgoing SMS Dispatch via REST
+  if (path == 'api/sms/send') {
+    try {
+      final bodyStr = await request.readAsString();
+      final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+      final recipient = json['recipient']?.toString() ?? '';
+      final message = json['message']?.toString() ?? '';
+      final ok = await telephonyController.sendSms(recipient, message);
+      logEvent('SMS Dispatched', 'Sent SMS to $recipient via REST (${ok ? "Success" : "Failed"})', ok ? ActivityType.success : ActivityType.call);
+      return Response.ok(
+        jsonEncode({'status': ok ? 'ok' : 'error', 'recipient': recipient}),
+        headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  // 11. Contact Avatar JPEG Stream
+  if (path == 'api/contacts/avatar') {
+    final id = request.url.queryParameters['id'] ?? '';
+    if (id.isNotEmpty) {
+      try {
+        final bytes = await FastContacts.getContactImage(id);
+        if (bytes != null && bytes.isNotEmpty) {
+          return Response.ok(
+            bytes,
+            headers: {
+              'content-type': 'image/jpeg',
+              'cache-control': 'public, max-age=86400',
+              'access-control-allow-origin': '*',
+            },
+          );
+        }
+      } catch (_) {}
+    }
+    return Response.notFound('No avatar found');
+  }
+
+  // 12. Hotspot State & Tethering Management
+  if (path == 'api/hotspot/status') {
+    final active = await telephonyController.isHotspotActive();
+    return Response.ok(
+      jsonEncode({'active': active, 'gateway': '192.168.43.1'}),
+      headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+    );
+  }
+
+  if (path == 'api/hotspot/start') {
+    final res = await telephonyController.openTetherSettings();
+    return Response.ok(
+      jsonEncode({'success': res}),
+      headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+    );
   }
 
     return Response.notFound('Not found');

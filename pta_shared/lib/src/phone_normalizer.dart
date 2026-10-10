@@ -39,4 +39,42 @@ class PhoneNumberNormalizer {
     if (n1.isEmpty || n2.isEmpty) return false;
     return n1 == n2;
   }
+
+  /// Converts any alphabetic string to its T9 keypad digit sequence
+  /// e.g. "Ali" -> "254", "Mom" -> "666"
+  static String nameToT9(String name) {
+    final buffer = StringBuffer();
+    for (int i = 0; i < name.length; i++) {
+      final char = name[i].toUpperCase();
+      if (char.compareTo('A') >= 0 && char.compareTo('C') <= 0) {
+        buffer.write('2');
+      } else if (char.compareTo('D') >= 0 && char.compareTo('F') <= 0) {
+        buffer.write('3');
+      } else if (char.compareTo('G') >= 0 && char.compareTo('I') <= 0) {
+        buffer.write('4');
+      } else if (char.compareTo('J') >= 0 && char.compareTo('L') <= 0) {
+        buffer.write('5');
+      } else if (char.compareTo('M') >= 0 && char.compareTo('O') <= 0) {
+        buffer.write('6');
+      } else if (char.compareTo('P') >= 0 && char.compareTo('S') <= 0) {
+        buffer.write('7');
+      } else if (char.compareTo('T') >= 0 && char.compareTo('V') <= 0) {
+        buffer.write('8');
+      } else if (char.compareTo('W') >= 0 && char.compareTo('Z') <= 0) {
+        buffer.write('9');
+      } else if (char.compareTo('0') >= 0 && char.compareTo('9') <= 0) {
+        buffer.write(char);
+      }
+    }
+    return buffer.toString();
+  }
+
+  /// Checks if a contact name matches the typed T9 digits
+  static bool matchesT9(String name, String digits) {
+    if (digits.isEmpty || name.isEmpty) return false;
+    final cleanDigits = digits.replaceAll(RegExp(r'\D'), '');
+    if (cleanDigits.isEmpty) return false;
+    final t9Sequence = nameToT9(name);
+    return t9Sequence.contains(cleanDigits);
+  }
 }

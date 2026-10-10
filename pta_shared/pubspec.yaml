@@ -1,14 +1,14 @@
 name: pta_shared
-description: A starting point for Dart libraries or applications.
+description: Shared models and protocols for PTA Native.
 version: 1.0.0
-# repository: https://github.com/my_org/my_repo
 
 environment:
   sdk: ^3.13.5
 
-# Add regular dependencies here.
 dependencies:
-  # path: ^1.9.0
+  flutter:
+    sdk: flutter
+  flutter_webrtc: ^0.12.4
 
 dev_dependencies:
   lints: ^6.0.0
