@@ -27,11 +27,20 @@ class ContactAvatarWidget extends StatelessWidget {
   String get _initials {
     final clean = displayName.trim();
     if (clean.isEmpty) return '?';
+
+    // Remove any punctuation / phone characters
+    final lettersOnly = clean.replaceAll(RegExp(r'[^a-zA-Z\u0600-\u06FF]'), '');
+    if (lettersOnly.isEmpty) return '';
+
     final parts = clean.split(RegExp(r'\s+'));
     if (parts.length >= 2 && parts[0].isNotEmpty && parts[1].isNotEmpty) {
-      return '${parts[0][0]}${parts[1][0]}'.toUpperCase();
+      final first = parts[0].replaceAll(RegExp(r'[^a-zA-Z\u0600-\u06FF]'), '');
+      final second = parts[1].replaceAll(RegExp(r'[^a-zA-Z\u0600-\u06FF]'), '');
+      if (first.isNotEmpty && second.isNotEmpty) {
+        return '${first[0]}${second[0]}'.toUpperCase();
+      }
     }
-    return clean.substring(0, 1).toUpperCase();
+    return lettersOnly.substring(0, 1).toUpperCase();
   }
 
   @override
@@ -41,6 +50,8 @@ class ContactAvatarWidget extends StatelessWidget {
 
     final defaultBg = backgroundColor ?? const Color(0xFF7A8DBE);
     final defaultText = textColor ?? Colors.white;
+    final initials = _initials;
+    final isUnsavedNumber = initials.isEmpty;
 
     Widget fallbackMonogram = Container(
       width: size,
@@ -51,15 +62,17 @@ class ContactAvatarWidget extends StatelessWidget {
         border: border,
       ),
       alignment: Alignment.center,
-      child: Text(
-        _initials,
-        style: TextStyle(
-          color: defaultText,
-          fontSize: fontSize,
-          fontWeight: FontWeight.bold,
-          letterSpacing: -0.2,
-        ),
-      ),
+      child: isUnsavedNumber
+          ? Icon(Icons.person_rounded, color: defaultText.withValues(alpha: 0.85), size: size * 0.55)
+          : Text(
+              initials,
+              style: TextStyle(
+                color: defaultText,
+                fontSize: fontSize,
+                fontWeight: FontWeight.bold,
+                letterSpacing: -0.2,
+              ),
+            ),
     );
 
     if (avatarUrl == null) {

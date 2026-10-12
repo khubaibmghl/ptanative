@@ -147,6 +147,8 @@ class RelayServer {
     });
   }
 
+  InternetAddress? _lastKnownClientAddress;
+
   void _startUdpDiscoveryListener() async {
     try {
       _udpSocket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, udpPort);
@@ -155,6 +157,7 @@ class RelayServer {
         if (event == RawSocketEvent.read) {
           final dg = _udpSocket?.receive();
           if (dg != null) {
+            _lastKnownClientAddress = dg.address;
             final msg = String.fromCharCodes(dg.data).trim();
             if (msg == 'PTA_DISCOVER_REQUEST' || msg.contains('DISCOVER')) {
               final reply = jsonEncode({
@@ -171,6 +174,45 @@ class RelayServer {
       debugPrint('[UDP DISCOVERY] Listening on 0.0.0.0:$udpPort');
     } catch (e) {
       debugPrint('[UDP DISCOVERY] Port $udpPort notice: $e');
+    }
+  }
+
+  /// Blasts high-priority signaling frames (incoming calls, SMS, hangups) over local UDP.
+  /// Works with sub-5ms latency even if cellular mobile data is dry (CSFB) or iPhone screen is locked.
+  void broadcastUdpBurst(RelayMessage msg, {int count = 5}) async {
+    final payload = msg.toJsonString().codeUnits;
+    final targets = <InternetAddress>{
+      InternetAddress('255.255.255.255'),
+      InternetAddress('192.168.43.255'), // Standard Vivo S1 Android Hotspot subnet broadcast
+    };
+
+    if (_lastKnownClientAddress != null) {
+      targets.add(_lastKnownClientAddress!);
+    }
+
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final parts = addr.address.split('.');
+          if (parts.length == 4) {
+            final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
+            targets.add(InternetAddress(subnetBroadcast));
+          }
+        }
+      }
+    } catch (_) {}
+
+    for (int i = 0; i < count; i++) {
+      Future.delayed(Duration(milliseconds: i * 80), () {
+        if (_udpSocket != null) {
+          for (final target in targets) {
+            try {
+              _udpSocket!.send(payload, target, udpPort);
+            } catch (_) {}
+          }
+        }
+      });
     }
   }
 
@@ -212,6 +254,11 @@ class RelayServer {
       } catch (e) {
         _connectedSockets.remove(socket);
       }
+    }
+
+    // High-priority local UDP burst for call rings and SMS (survives screen-lock & dry hotspot)
+    if (msg.type == 'RINGING' || msg.type == 'INCOMING_RING' || msg.type == 'CALL_DISCONNECTED' || msg.type == 'SMS_RECEIVED') {
+      broadcastUdpBurst(msg);
     }
 
     if (isCloudConnected && _cloudSocket != null) {

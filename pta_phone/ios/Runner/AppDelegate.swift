@@ -2,23 +2,78 @@ import Flutter
 import UIKit
 import Intents
 import AVFoundation
+import MediaPlayer
+import Network
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+  static weak var shared: AppDelegate?
+
   private var nativeChannel: FlutterMethodChannel?
   private var silentAudioPlayer: AVAudioPlayer?
   private var audioPlayer: AVPlayer?
   private var audioPlayerChannel: FlutterMethodChannel?
   private var audioTimeObserver: Any?
+  private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
+  private var udpListener: NWListener?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
+    AppDelegate.shared = self
     startSilentAudioKeepAlive()
     setupAudioInterruptionObserver()
+    startUdpListener()
+
+    DispatchQueue.main.async { [weak self] in
+      _ = self?.getNativeChannel()
+    }
+
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
   }
+
+  // MARK: - Scene & Application Lifecycle Handlers (Permanent Keep-Alive)
+
+  func handleSceneDidEnterBackground() {
+    ensureKeepAlivePlaying()
+    startBackgroundTask()
+  }
+
+  func handleSceneWillEnterForeground() {
+    ensureKeepAlivePlaying()
+    endBackgroundTask()
+  }
+
+  func handleSceneDidBecomeActive() {
+    ensureKeepAlivePlaying()
+  }
+
+  private func startBackgroundTask() {
+    endBackgroundTask()
+    backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") { [weak self] in
+      self?.endBackgroundTask()
+    }
+  }
+
+  private func endBackgroundTask() {
+    if backgroundTask != .invalid {
+      UIApplication.shared.endBackgroundTask(backgroundTask)
+      backgroundTask = .invalid
+    }
+  }
+
+  override func applicationDidEnterBackground(_ application: UIApplication) {
+    super.applicationDidEnterBackground(application)
+    handleSceneDidEnterBackground()
+  }
+
+  override func applicationWillEnterForeground(_ application: UIApplication) {
+    super.applicationWillEnterForeground(application)
+    handleSceneWillEnterForeground()
+  }
+
+  // MARK: - Silent Audio & NowPlaying Keep-Alive
 
   private func startSilentAudioKeepAlive() {
     ensureKeepAlivePlaying()
@@ -43,6 +98,22 @@ import AVFoundation
       name: AVAudioSession.mediaServicesWereLostNotification,
       object: nil
     )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppLifecycleStateChanged),
+      name: UIApplication.didBecomeActiveNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
+      selector: #selector(handleAppLifecycleStateChanged),
+      name: UIApplication.didEnterBackgroundNotification,
+      object: nil
+    )
+  }
+
+  @objc private func handleAppLifecycleStateChanged() {
+    ensureKeepAlivePlaying()
   }
 
   @objc private func handleAudioInterruption(_ notification: Notification) {
@@ -68,7 +139,7 @@ import AVFoundation
     print("[AppDelegate] Media Services Were Lost...")
   }
 
-  private func ensureKeepAlivePlaying() {
+  func ensureKeepAlivePlaying() {
     do {
       let audioSession = AVAudioSession.sharedInstance()
       try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
@@ -78,16 +149,27 @@ import AVFoundation
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
         silentAudioPlayer?.numberOfLoops = -1
-        silentAudioPlayer?.volume = 0.01
+        silentAudioPlayer?.volume = 0.05
       }
 
       if silentAudioPlayer?.isPlaying == false {
         silentAudioPlayer?.play()
         print("[AppDelegate] Silent audio keep-alive player actively playing.")
       }
+
+      setupNowPlayingInfo()
     } catch {
       print("[AppDelegate] Ensure Keep-Alive Exception: \(error)")
     }
+  }
+
+  private func setupNowPlayingInfo() {
+    var nowPlayingInfo = [String: Any]()
+    nowPlayingInfo[MPMediaItemPropertyTitle] = "PTA Cellular Relay Active"
+    nowPlayingInfo[MPMediaItemPropertyArtist] = "Vivo S1 • Zong 4G Link"
+    nowPlayingInfo[MPNowPlayingInfoPropertyIsLiveStream] = true
+    MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
+    MPNowPlayingInfoCenter.default().playbackState = .playing
   }
 
   private func createSilentWavData() -> Data {
@@ -114,10 +196,99 @@ import AVFoundation
     header.append(contentsOf: withUnsafeBytes(of: bitsPerSample.littleEndian) { Data($0) })
     header.append(contentsOf: "data".utf8)
     header.append(contentsOf: withUnsafeBytes(of: dataSize.littleEndian) { Data($0) })
-    header.append(Data(count: Int(dataSize)))
+
+    // Generate inaudible 20Hz sub-bass tone so iOS mediaserverd never marks the session idle
+    var pcmData = Data(count: Int(dataSize))
+    pcmData.withUnsafeMutableBytes { (buffer: UnsafeMutableRawBufferPointer) in
+      let int16Buffer = buffer.bindMemory(to: Int16.self)
+      for i in 0..<Int(numSamples) {
+        let angle = 2.0 * Double.pi * 20.0 * Double(i) / Double(sampleRate)
+        let sample = Int16(sin(angle) * 35.0)
+        int16Buffer[i] = sample
+      }
+    }
+    header.append(pcmData)
 
     return header
   }
+
+  // MARK: - Native UDP Listener (Network.framework) for Screen-Lock & Dry Hotspot Calling
+
+  func startUdpListener() {
+    if udpListener != nil { return }
+    do {
+      let parameters = NWParameters.udp
+      parameters.allowLocalEndpointReuse = true
+      guard let port = NWEndpoint.Port(rawValue: 8081) else { return }
+      udpListener = try NWListener(using: parameters, on: port)
+
+      udpListener?.stateUpdateHandler = { state in
+        switch state {
+        case .ready:
+          print("[NWListener] Native UDP Receiver listening on port 8081")
+        case .failed(let err):
+          print("[NWListener] Native UDP Receiver error: \(err)")
+        default:
+          break
+        }
+      }
+
+      udpListener?.newConnectionHandler = { [weak self] connection in
+        self?.handleUdpConnection(connection)
+      }
+
+      udpListener?.start(queue: DispatchQueue.global(qos: .userInitiated))
+    } catch {
+      print("[NWListener] Failed to start UDP listener: \(error)")
+    }
+  }
+
+  private func handleUdpConnection(_ connection: NWConnection) {
+    connection.start(queue: DispatchQueue.global(qos: .userInitiated))
+    receiveNextUdpMessage(on: connection)
+  }
+
+  private func receiveNextUdpMessage(on connection: NWConnection) {
+    connection.receiveMessage { [weak self] (content, context, isComplete, error) in
+      if let data = content, !data.isEmpty {
+        self?.processIncomingUdpData(data)
+      }
+      if error == nil {
+        self?.receiveNextUdpMessage(on: connection)
+      }
+    }
+  }
+
+  private func processIncomingUdpData(_ data: Data) {
+    guard let rawStr = String(data: data, encoding: .utf8) else { return }
+    print("[NativeUDP] Received datagram on 8081: \(rawStr)")
+
+    DispatchQueue.main.async { [weak self] in
+      guard let self = self else { return }
+      self.ensureKeepAlivePlaying()
+
+      if let channel = self.getNativeChannel() {
+        channel.invokeMethod("onNativeUdpFrame", arguments: rawStr)
+      }
+
+      guard let json = (try? JSONSerialization.jsonObject(with: data, options: [])) as? [String: Any],
+            let type = json["type"] as? String else { return }
+
+      if type == "RINGING" || type == "INCOMING_RING" {
+        let dataObj = json["data"] as? [String: Any] ?? json
+        let number = dataObj["number"] as? String ?? ""
+        let name = dataObj["name"] as? String ?? number
+        let callId = dataObj["call_id"] as? String ?? UUID().uuidString
+        self.getNativeChannel()?.invokeMethod("onNativeIncomingCall", arguments: [
+          "number": number,
+          "name": name,
+          "callId": callId
+        ])
+      }
+    }
+  }
+
+  // MARK: - Flutter Method Channels & Audio Player
 
   private func getNativeChannel() -> FlutterMethodChannel? {
     if let channel = nativeChannel {
@@ -155,13 +326,44 @@ import AVFoundation
       switch call.method {
       case "playUrl":
         guard let args = call.arguments as? [String: Any],
-              let urlString = args["url"] as? String,
-              let url = URL(string: urlString) else {
+              let urlString = args["url"] as? String else {
           result(FlutterError(code: "INVALID_ARGS", message: "URL required", details: nil))
           return
         }
+        let url: URL
+        if urlString.hasPrefix("file://") {
+          url = URL(string: urlString) ?? URL(fileURLWithPath: String(urlString.dropFirst(7)))
+        } else if urlString.hasPrefix("/") {
+          url = URL(fileURLWithPath: urlString)
+        } else if let parsed = URL(string: urlString), parsed.scheme != nil {
+          url = parsed
+        } else {
+          url = URL(fileURLWithPath: urlString)
+        }
         self.playAudio(url: url)
         result(true)
+
+      case "shareFile":
+        guard let args = call.arguments as? [String: Any],
+              let filePath = args["path"] as? String else {
+          result(FlutterError(code: "INVALID_ARGS", message: "Path required", details: nil))
+          return
+        }
+        let fileUrl = URL(fileURLWithPath: filePath)
+        let activityVC = UIActivityViewController(activityItems: [fileUrl], applicationActivities: nil)
+        DispatchQueue.main.async {
+          if let rootVC = UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? self.window?.rootViewController {
+            if let popover = activityVC.popoverPresentationController {
+              popover.sourceView = rootVC.view
+              popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
+              popover.permittedArrowDirections = []
+            }
+            rootVC.present(activityVC, animated: true)
+            result(true)
+          } else {
+            result(FlutterError(code: "NO_ROOT_VC", message: "No root view controller", details: nil))
+          }
+        }
 
       case "pause":
         self.audioPlayer?.pause()
@@ -265,26 +467,6 @@ import AVFoundation
       sendDialIntent(handle)
     }
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
-  }
-
-  private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
-
-  override func applicationDidEnterBackground(_ application: UIApplication) {
-    super.applicationDidEnterBackground(application)
-    ensureKeepAlivePlaying()
-    backgroundTask = application.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") {
-      application.endBackgroundTask(self.backgroundTask)
-      self.backgroundTask = .invalid
-    }
-  }
-
-  override func applicationWillEnterForeground(_ application: UIApplication) {
-    super.applicationWillEnterForeground(application)
-    ensureKeepAlivePlaying()
-    if backgroundTask != .invalid {
-      application.endBackgroundTask(backgroundTask)
-      backgroundTask = .invalid
-    }
   }
 
   func didInitializeImplicitFlutterEngine(_ engineBridge: FlutterImplicitEngineBridge) {

@@ -135,4 +135,14 @@ class NativeAudioService {
       await _channel.invokeMethod('seek', {'seconds': seconds});
     } catch (_) {}
   }
+
+  /// Presents native iOS Share Sheet (AirDrop, Save to Files, Messages) for audio file
+  Future<bool> shareFile(String filePath) async {
+    try {
+      final res = await _channel.invokeMethod<bool>('shareFile', {'path': filePath});
+      return res ?? false;
+    } catch (_) {
+      return false;
+    }
+  }
 }

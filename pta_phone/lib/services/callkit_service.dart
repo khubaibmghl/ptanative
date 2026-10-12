@@ -39,7 +39,7 @@ class CallKitService {
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
-        appName: 'PTA Phone',
+        appName: 'PTA',
         avatar: '',
         handle: handle,
         type: 0, // Audio call
@@ -97,7 +97,7 @@ class CallKitService {
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
-        appName: 'PTA Phone',
+        appName: 'PTA',
         handle: handle,
         type: 0,
         normalHandle: 1, // Clean telephone number stored in Apple CallKit database

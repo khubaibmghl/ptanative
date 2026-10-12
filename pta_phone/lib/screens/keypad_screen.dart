@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -16,11 +17,28 @@ class _KeypadScreenState extends State<KeypadScreen> {
   String _digits = '';
   String? _clipboardNumber;
   List<ContactMatchModel> _matches = [];
+  StreamSubscription? _callSub;
 
   @override
   void initState() {
     super.initState();
     _checkClipboardForNumber();
+
+    // Auto-clear keypad number when a call ends
+    _callSub = RelayClient.instance.activeCallStream.listen((call) {
+      if (call == null && mounted && _digits.isNotEmpty) {
+        setState(() {
+          _digits = '';
+          _matches = [];
+        });
+      }
+    });
+  }
+
+  @override
+  void dispose() {
+    _callSub?.cancel();
+    super.dispose();
   }
 
   Future<void> _checkClipboardForNumber() async {
@@ -112,6 +130,10 @@ class _KeypadScreenState extends State<KeypadScreen> {
     if (numberToDial.isEmpty) return;
     HapticFeedback.heavyImpact();
     RelayClient.instance.dialNumber(numberToDial);
+    setState(() {
+      _digits = '';
+      _matches = [];
+    });
   }
 
   @override

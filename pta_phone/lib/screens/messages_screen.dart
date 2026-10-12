@@ -1,9 +1,13 @@
+import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
+import '../models/sms_thread_model.dart';
 import '../services/relay_client.dart';
 import '../theme/liquid_glass_theme.dart';
+import '../widgets/contact_avatar_widget.dart';
+import 'sms_thread_screen.dart';
 
 class MessagesScreen extends StatefulWidget {
   const MessagesScreen({super.key});
@@ -13,40 +17,131 @@ class MessagesScreen extends StatefulWidget {
 }
 
 class _MessagesScreenState extends State<MessagesScreen> {
-  List<SmsMessageModel> _messages = [];
+  List<SmsThreadModel> _threads = [];
+  List<SmsThreadModel> _filteredThreads = [];
   bool _isLoading = true;
+  String _searchQuery = '';
+  final TextEditingController _searchController = TextEditingController();
+  StreamSubscription? _smsSubscription;
 
   @override
   void initState() {
     super.initState();
-    _loadMessages();
+    _loadThreads();
 
-    RelayClient.instance.smsStream.listen((_) {
-      _loadMessages();
+    _smsSubscription = RelayClient.instance.smsStream.listen((_) {
+      _loadThreads();
     });
   }
 
-  Future<void> _loadMessages() async {
-    final list = await DatabaseHelper.instance.getMessages();
+  @override
+  void dispose() {
+    _smsSubscription?.cancel();
+    _searchController.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadThreads() async {
+    final messages = await DatabaseHelper.instance.getMessages();
+    final contacts = await DatabaseHelper.instance.getContacts();
+
+    // Group messages by contact / phone number
+    final Map<String, List<SmsMessageModel>> grouped = {};
+    final Map<String, String> rawAddresses = {};
+
+    for (final msg in messages) {
+      final clean = msg.sender.startsWith('To:') ? msg.sender.substring(3).trim() : msg.sender.trim();
+      final norm = PhoneNumberNormalizer.normalize(clean);
+      final key = norm.isNotEmpty ? norm : clean.toLowerCase();
+
+      grouped.putIfAbsent(key, () => []).add(msg);
+      rawAddresses.putIfAbsent(key, () => clean);
+    }
+
+    // Build thread models
+    final List<SmsThreadModel> threadList = [];
+
+    for (final entry in grouped.entries) {
+      final key = entry.key;
+      final msgs = entry.value;
+      // Sort chronologically (oldest to newest for chat view)
+      msgs.sort((a, b) => a.timestamp.compareTo(b.timestamp));
+
+      final rawAddr = rawAddresses[key] ?? key;
+      String displayName = rawAddr;
+      String? contactId;
+
+      // Find matching contact in permanent SQLite contact list
+      for (final c in contacts) {
+        bool matches = false;
+        for (final p in c.phoneNumbers) {
+          if (PhoneNumberNormalizer.areMatching(p.rawNumber, rawAddr) ||
+              PhoneNumberNormalizer.areMatching(p.normalizedNumber, rawAddr)) {
+            matches = true;
+            break;
+          }
+        }
+        if (!matches && c.displayName.trim().toLowerCase() == rawAddr.trim().toLowerCase()) {
+          matches = true;
+        }
+
+        if (matches) {
+          displayName = c.displayName;
+          contactId = c.id;
+          break;
+        }
+      }
+
+      if (contactId == null && PhoneNumberNormalizer.normalize(rawAddr).isNotEmpty) {
+        displayName = PhoneNumberNormalizer.formatForDisplay(rawAddr);
+      }
+
+      threadList.add(SmsThreadModel(
+        normalizedKey: key,
+        rawAddress: rawAddr,
+        displayName: displayName,
+        contactId: contactId,
+        messages: msgs,
+      ));
+    }
+
+    // Sort threads by most recent message descending
+    threadList.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
     if (mounted) {
       setState(() {
-        _messages = list;
+        _threads = threadList;
+        _applyFilter();
         _isLoading = false;
       });
     }
   }
 
-  void _copyOtpToClipboard(String otp) {
-    Clipboard.setData(ClipboardData(text: otp));
-    HapticFeedback.mediumImpact();
-    ScaffoldMessenger.of(context).showSnackBar(
-      SnackBar(
-        content: Text('OTP code $otp copied to clipboard!'),
-        backgroundColor: LiquidGlassTheme.surfaceDark,
-        behavior: SnackBarBehavior.floating,
-        duration: const Duration(seconds: 2),
+  void _applyFilter() {
+    if (_searchQuery.trim().isEmpty) {
+      _filteredThreads = List.from(_threads);
+    } else {
+      final q = _searchQuery.trim().toLowerCase();
+      _filteredThreads = _threads.where((t) {
+        if (t.displayName.toLowerCase().contains(q)) return true;
+        if (t.rawAddress.toLowerCase().contains(q)) return true;
+        for (final m in t.messages) {
+          if (m.body.toLowerCase().contains(q)) return true;
+          if (m.extractedOtp != null && m.extractedOtp!.contains(q)) return true;
+        }
+        return false;
+      }).toList();
+    }
+  }
+
+  void _openThread(SmsThreadModel thread) async {
+    HapticFeedback.lightImpact();
+    await Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (_) => SmsThreadScreen(thread: thread),
       ),
     );
+    _loadThreads();
   }
 
   void _openComposeSheet([String? initialRecipient]) {
@@ -55,7 +150,12 @@ class _MessagesScreenState extends State<MessagesScreen> {
       context: context,
       isScrollControlled: true,
       backgroundColor: Colors.transparent,
-      builder: (ctx) => _SmsComposeSheet(initialRecipient: initialRecipient),
+      builder: (ctx) => _SmsComposeSheet(
+        initialRecipient: initialRecipient,
+        onDispatched: (recipient) {
+          _loadThreads();
+        },
+      ),
     );
   }
 
@@ -66,7 +166,7 @@ class _MessagesScreenState extends State<MessagesScreen> {
     return Scaffold(
       backgroundColor: Colors.transparent,
       appBar: AppBar(
-        title: const Text('Bank OTP & SMS'),
+        title: const Text('Messages'),
         actions: [
           IconButton(
             icon: Container(
@@ -99,247 +199,292 @@ class _MessagesScreenState extends State<MessagesScreen> {
       ),
       body: _isLoading
           ? const Center(child: CircularProgressIndicator())
-          : _messages.isEmpty
-              ? Center(
-                  child: Column(
-                    mainAxisAlignment: MainAxisAlignment.center,
-                    children: [
-                      Icon(
-                        Icons.mark_chat_unread_outlined,
-                        size: 54,
-                        color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.4),
-                      ),
-                      const SizedBox(height: 16),
-                      const Text(
-                        'No SMS messages yet',
-                        style: TextStyle(
-                          color: LiquidGlassTheme.textSecondary,
-                          fontSize: 16,
-                          fontWeight: FontWeight.w500,
+          : Column(
+              children: [
+                // Search Bar
+                Padding(
+                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
+                      borderRadius: BorderRadius.circular(14),
+                    ),
+                    child: TextField(
+                      controller: _searchController,
+                      style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 15),
+                      onChanged: (val) {
+                        setState(() {
+                          _searchQuery = val;
+                          _applyFilter();
+                        });
+                      },
+                      decoration: InputDecoration(
+                        hintText: 'Search conversations or messages...',
+                        hintStyle: TextStyle(
+                          color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5),
+                          fontSize: 14,
                         ),
+                        prefixIcon: const Icon(Icons.search_rounded, size: 20, color: LiquidGlassTheme.textSecondary),
+                        suffixIcon: _searchQuery.isNotEmpty
+                            ? IconButton(
+                                icon: const Icon(Icons.close_rounded, size: 18, color: LiquidGlassTheme.textSecondary),
+                                onPressed: () {
+                                  _searchController.clear();
+                                  setState(() {
+                                    _searchQuery = '';
+                                    _applyFilter();
+                                  });
+                                },
+                              )
+                            : null,
+                        border: InputBorder.none,
+                        contentPadding: const EdgeInsets.symmetric(vertical: 11),
                       ),
-                      const SizedBox(height: 8),
-                      Text(
-                        'Tap Compose SMS to send a message via Vivo S1',
-                        style: TextStyle(
-                          color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.7),
-                          fontSize: 13,
-                        ),
-                      ),
-                    ],
+                    ),
                   ),
-                )
-              : ListView.separated(
-                  padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 140),
-                  itemCount: _messages.length,
-                  separatorBuilder: (context, index) => const SizedBox(height: 12),
-                  itemBuilder: (context, index) {
-                    final msg = _messages[index];
-                    return _buildMessageCard(msg);
-                  },
                 ),
+
+                // Thread List
+                Expanded(
+                  child: _filteredThreads.isEmpty
+                      ? Center(
+                          child: Column(
+                            mainAxisAlignment: MainAxisAlignment.center,
+                            children: [
+                              Icon(
+                                Icons.chat_bubble_outline_rounded,
+                                size: 54,
+                                color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.4),
+                              ),
+                              const SizedBox(height: 16),
+                              Text(
+                                _searchQuery.isNotEmpty ? 'No conversations found' : 'No SMS messages yet',
+                                style: const TextStyle(
+                                  color: LiquidGlassTheme.textSecondary,
+                                  fontSize: 16,
+                                  fontWeight: FontWeight.w500,
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Text(
+                                _searchQuery.isNotEmpty
+                                    ? 'Try another search query'
+                                    : 'Messages sent and received via Vivo S1 appear here',
+                                style: TextStyle(
+                                  color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.7),
+                                  fontSize: 13,
+                                ),
+                              ),
+                            ],
+                          ),
+                        )
+                      : ListView.separated(
+                          padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 140),
+                          itemCount: _filteredThreads.length,
+                          separatorBuilder: (context, index) => const SizedBox(height: 8),
+                          itemBuilder: (context, index) {
+                            final thread = _filteredThreads[index];
+                            return _buildThreadCard(thread);
+                          },
+                        ),
+                ),
+              ],
+            ),
     );
   }
 
-  Widget _buildMessageCard(SmsMessageModel msg) {
-    final hasOtp = msg.extractedOtp != null && msg.extractedOtp!.isNotEmpty;
-    final isOutgoing = msg.sender.startsWith('To:');
-    final isDark = LiquidGlassTheme.isDarkMode;
+  Widget _buildThreadCard(SmsThreadModel thread) {
+    final latest = thread.latestMessage;
+    final isOutgoing = latest.sender.startsWith('To:');
+    final hasOtp = thread.hasOtp;
+    final unread = thread.unreadCount > 0;
 
     return GlassCard(
-      borderRadius: 18,
-      padding: const EdgeInsets.all(16),
+      borderRadius: 16,
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+      onTap: () => _openThread(thread),
       color: hasOtp
           ? const Color(0x352A2410)
-          : (isOutgoing
-              ? (isDark ? const Color(0x250A4C2E) : const Color(0x1534C759))
-              : LiquidGlassTheme.glassFill),
+          : (unread ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.08) : LiquidGlassTheme.glassFill),
       border: hasOtp
           ? Border.all(color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.4), width: 1)
-          : (isOutgoing
-              ? Border.all(color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.3), width: 1)
+          : (unread
+              ? Border.all(color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.35), width: 1)
               : null),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.center,
         children: [
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.all(8),
-                decoration: BoxDecoration(
-                  color: hasOtp
-                      ? LiquidGlassTheme.goldOtp.withValues(alpha: 0.2)
-                      : (isOutgoing
-                          ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.2)
-                          : Colors.white12),
-                  shape: BoxShape.circle,
-                ),
-                child: Icon(
-                  hasOtp
-                      ? Icons.shield_outlined
-                      : (isOutgoing ? Icons.arrow_outward_rounded : Icons.sms_outlined),
-                  color: hasOtp
-                      ? LiquidGlassTheme.goldOtp
-                      : (isOutgoing ? LiquidGlassTheme.gsmGreen : Colors.white70),
-                  size: 18,
-                ),
-              ),
-              const SizedBox(width: 10),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
+          // Monogram Contact Avatar
+          ContactAvatarWidget(
+            contactId: thread.contactId,
+            displayName: thread.displayName,
+            size: 48,
+            fontSize: 20,
+          ),
+          const SizedBox(width: 12),
+
+          // Thread Details
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: [
+                // Row 1: Name / Address + Time
+                Row(
                   children: [
-                    Text(
-                      msg.sender,
-                      style: const TextStyle(
-                        color: LiquidGlassTheme.textPrimary,
-                        fontSize: 16,
-                        fontWeight: FontWeight.w600,
+                    if (isOutgoing) ...[
+                      Icon(
+                        Icons.arrow_outward_rounded,
+                        size: 13,
+                        color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.9),
+                      ),
+                      const SizedBox(width: 4),
+                    ],
+                    Expanded(
+                      child: Text(
+                        thread.displayName,
+                        style: TextStyle(
+                          color: LiquidGlassTheme.textPrimary,
+                          fontSize: 16,
+                          fontWeight: unread ? FontWeight.bold : FontWeight.w600,
+                          letterSpacing: -0.2,
+                        ),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                       ),
                     ),
-                    if (isOutgoing) ...[
-                      const SizedBox(height: 2),
-                      Row(
-                        children: [
-                          Icon(Icons.sim_card_outlined, size: 12, color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.8)),
-                          const SizedBox(width: 4),
-                          Text(
-                            'Sent via Vivo S1 SIM',
-                            style: TextStyle(
-                              color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.9),
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                    const SizedBox(width: 8),
+                    Text(
+                      _formatTimestamp(thread.timestamp),
+                      style: TextStyle(
+                        color: unread ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.textSecondary,
+                        fontSize: 12,
+                        fontWeight: unread ? FontWeight.w600 : FontWeight.normal,
+                      ),
+                    ),
+                  ],
+                ),
+                const SizedBox(height: 4),
+
+                // Row 2: Message preview snippet + Badges
+                Row(
+                  children: [
+                    Expanded(
+                      child: Text(
+                        latest.body,
+                        style: TextStyle(
+                          color: unread
+                              ? LiquidGlassTheme.textPrimary
+                              : LiquidGlassTheme.textSecondary.withValues(alpha: 0.8),
+                          fontSize: 13.5,
+                          fontWeight: unread ? FontWeight.w500 : FontWeight.normal,
+                          height: 1.25,
+                        ),
+                        maxLines: 2,
+                        overflow: TextOverflow.ellipsis,
+                      ),
+                    ),
+                    const SizedBox(width: 8),
+
+                    // OTP badge
+                    if (hasOtp) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.2),
+                          borderRadius: BorderRadius.circular(6),
+                          border: Border.all(color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.4), width: 0.5),
+                        ),
+                        child: Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            const Icon(Icons.shield_outlined, color: LiquidGlassTheme.goldOtp, size: 10),
+                            const SizedBox(width: 3),
+                            Text(
+                              thread.latestOtp ?? 'OTP',
+                              style: const TextStyle(
+                                color: LiquidGlassTheme.goldOtp,
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                              ),
                             ),
+                          ],
+                        ),
+                      ),
+                      const SizedBox(width: 6),
+                    ],
+
+                    // Message count pill
+                    if (thread.messages.length > 1) ...[
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                        decoration: BoxDecoration(
+                          color: Colors.white.withValues(alpha: 0.08),
+                          borderRadius: BorderRadius.circular(8),
+                        ),
+                        child: Text(
+                          '${thread.messages.length}',
+                          style: const TextStyle(
+                            color: LiquidGlassTheme.textSecondary,
+                            fontSize: 11,
+                            fontWeight: FontWeight.w600,
                           ),
-                        ],
+                        ),
+                      ),
+                    ],
+
+                    // Unread blue indicator dot
+                    if (unread) ...[
+                      const SizedBox(width: 6),
+                      Container(
+                        width: 9,
+                        height: 9,
+                        decoration: const BoxDecoration(
+                          color: LiquidGlassTheme.iosBlue,
+                          shape: BoxShape.circle,
+                        ),
                       ),
                     ],
                   ],
                 ),
-              ),
-              Text(
-                _formatTimestamp(msg.timestamp),
-                style: const TextStyle(
-                  color: LiquidGlassTheme.textSecondary,
-                  fontSize: 12,
-                ),
-              ),
-            ],
-          ),
-          if (hasOtp) ...[
-            const SizedBox(height: 14),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
-              decoration: BoxDecoration(
-                color: Colors.black45,
-                borderRadius: BorderRadius.circular(12),
-                border: Border.all(color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.3)),
-              ),
-              child: Row(
-                children: [
-                  const Text(
-                    'OTP CODE:',
-                    style: TextStyle(
-                      color: LiquidGlassTheme.textSecondary,
-                      fontSize: 11,
-                      fontWeight: FontWeight.w600,
-                      letterSpacing: 1,
-                    ),
-                  ),
-                  const SizedBox(width: 12),
-                  Text(
-                    msg.extractedOtp!,
-                    style: const TextStyle(
-                      color: LiquidGlassTheme.goldOtp,
-                      fontSize: 22,
-                      fontWeight: FontWeight.bold,
-                      letterSpacing: 3,
-                    ),
-                  ),
-                  const Spacer(),
-                  GestureDetector(
-                    onTap: () => _copyOtpToClipboard(msg.extractedOtp!),
-                    child: Container(
-                      padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
-                      decoration: BoxDecoration(
-                        color: LiquidGlassTheme.goldOtp,
-                        borderRadius: BorderRadius.circular(8),
-                      ),
-                      child: const Row(
-                        children: [
-                          Icon(Icons.copy, color: Colors.black, size: 14),
-                          SizedBox(width: 4),
-                          Text(
-                            'Copy',
-                            style: TextStyle(
-                              color: Colors.black,
-                              fontSize: 12,
-                              fontWeight: FontWeight.bold,
-                            ),
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              ),
-            ),
-          ],
-          const SizedBox(height: 12),
-          Text(
-            msg.body,
-            style: const TextStyle(
-              color: LiquidGlassTheme.textPrimary,
-              fontSize: 14,
-              height: 1.35,
+              ],
             ),
           ),
-          if (!isOutgoing && !hasOtp) ...[
-            const SizedBox(height: 10),
-            Align(
-              alignment: Alignment.centerRight,
-              child: InkWell(
-                onTap: () => _openComposeSheet(msg.sender),
-                borderRadius: BorderRadius.circular(8),
-                child: Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      Icon(Icons.reply_rounded, size: 14, color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.9)),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'Reply via Vivo SIM',
-                        style: TextStyle(
-                          color: LiquidGlassTheme.iosBlue,
-                          fontSize: 12,
-                          fontWeight: FontWeight.w600,
-                        ),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ),
-          ],
         ],
       ),
     );
   }
 
   String _formatTimestamp(int ts) {
+    if (ts <= 0) return '';
     final dt = DateTime.fromMillisecondsSinceEpoch(ts);
-    final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
-    final ampm = dt.hour >= 12 ? 'PM' : 'AM';
-    final min = dt.minute.toString().padLeft(2, '0');
-    return '$hour:$min $ampm';
+    final now = DateTime.now();
+
+    if (dt.year == now.year && dt.month == now.month && dt.day == now.day) {
+      final hour = dt.hour % 12 == 0 ? 12 : dt.hour % 12;
+      final ampm = dt.hour >= 12 ? 'PM' : 'AM';
+      final min = dt.minute.toString().padLeft(2, '0');
+      return '$hour:$min $ampm';
+    }
+
+    final yesterday = now.subtract(const Duration(days: 1));
+    if (dt.year == yesterday.year && dt.month == yesterday.month && dt.day == yesterday.day) {
+      return 'Yesterday';
+    }
+
+    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
+    return '${months[dt.month - 1]} ${dt.day}';
   }
 }
 
 /// Apple Liquid Glass SMS Compose Sheet
 class _SmsComposeSheet extends StatefulWidget {
   final String? initialRecipient;
-  const _SmsComposeSheet({this.initialRecipient});
+  final ValueChanged<String>? onDispatched;
+
+  const _SmsComposeSheet({
+    this.initialRecipient,
+    this.onDispatched,
+  });
 
   @override
   State<_SmsComposeSheet> createState() => _SmsComposeSheetState();
@@ -349,11 +494,40 @@ class _SmsComposeSheetState extends State<_SmsComposeSheet> {
   late final TextEditingController _recipientController;
   final TextEditingController _bodyController = TextEditingController();
   bool _isSending = false;
+  List<ContactModel> _contacts = [];
+  List<ContactModel> _matchingContacts = [];
 
   @override
   void initState() {
     super.initState();
     _recipientController = TextEditingController(text: widget.initialRecipient ?? '');
+    _loadContacts();
+  }
+
+  Future<void> _loadContacts() async {
+    final list = await DatabaseHelper.instance.getContacts();
+    if (mounted) {
+      setState(() {
+        _contacts = list;
+      });
+    }
+  }
+
+  void _onRecipientChanged(String query) {
+    if (query.trim().isEmpty) {
+      setState(() => _matchingContacts = []);
+      return;
+    }
+    final q = query.trim().toLowerCase();
+    final matches = _contacts.where((c) {
+      if (c.displayName.toLowerCase().contains(q)) return true;
+      for (final p in c.phoneNumbers) {
+        if (p.rawNumber.contains(q) || p.normalizedNumber.contains(q)) return true;
+      }
+      return false;
+    }).take(4).toList();
+
+    setState(() => _matchingContacts = matches);
   }
 
   @override
@@ -374,6 +548,7 @@ class _SmsComposeSheetState extends State<_SmsComposeSheet> {
     final ok = await RelayClient.instance.sendSms(recipient, body);
     if (mounted) {
       setState(() => _isSending = false);
+      widget.onDispatched?.call(recipient);
       Navigator.pop(context);
       ScaffoldMessenger.of(context).showSnackBar(
         SnackBar(
@@ -439,7 +614,7 @@ class _SmsComposeSheetState extends State<_SmsComposeSheet> {
               Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 children: [
-                  Text(
+                  const Text(
                     'New Message',
                     style: TextStyle(
                       color: LiquidGlassTheme.textPrimary,
@@ -485,11 +660,12 @@ class _SmsComposeSheetState extends State<_SmsComposeSheet> {
           TextField(
             controller: _recipientController,
             keyboardType: TextInputType.phone,
-            style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 16),
+            onChanged: _onRecipientChanged,
+            style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 16),
             decoration: InputDecoration(
               labelText: 'To:',
               labelStyle: const TextStyle(color: LiquidGlassTheme.textSecondary, fontWeight: FontWeight.bold),
-              hintText: 'Phone number or name',
+              hintText: 'Phone number or contact name',
               hintStyle: TextStyle(color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5)),
               filled: true,
               fillColor: isDark ? Colors.white.withValues(alpha: 0.06) : Colors.black.withValues(alpha: 0.04),
@@ -500,13 +676,50 @@ class _SmsComposeSheetState extends State<_SmsComposeSheet> {
               ),
             ),
           ),
+
+          // Contact suggestions dropdown
+          if (_matchingContacts.isNotEmpty) ...[
+            const SizedBox(height: 6),
+            Container(
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF22222C) : const Color(0xFFEFEFF4),
+                borderRadius: BorderRadius.circular(12),
+              ),
+              child: Column(
+                children: _matchingContacts.map((c) {
+                  final primaryNumber = c.phoneNumbers.isNotEmpty ? c.phoneNumbers.first.rawNumber : '';
+                  return ListTile(
+                    dense: true,
+                    leading: ContactAvatarWidget(
+                      contactId: c.id,
+                      displayName: c.displayName,
+                      size: 32,
+                      fontSize: 13,
+                    ),
+                    title: Text(
+                      c.displayName,
+                      style: const TextStyle(fontSize: 14, fontWeight: FontWeight.w600),
+                    ),
+                    subtitle: Text(
+                      primaryNumber,
+                      style: const TextStyle(fontSize: 12, color: LiquidGlassTheme.textSecondary),
+                    ),
+                    onTap: () {
+                      _recipientController.text = primaryNumber;
+                      setState(() => _matchingContacts = []);
+                    },
+                  );
+                }).toList(),
+              ),
+            ),
+          ],
           const SizedBox(height: 12),
 
           // Body text field
           TextField(
             controller: _bodyController,
             maxLines: 4,
-            style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 15),
+            style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 15),
             decoration: InputDecoration(
               hintText: 'iMessage / Cellular SMS message...',
               hintStyle: TextStyle(color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5)),

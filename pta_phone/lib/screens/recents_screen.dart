@@ -2,7 +2,6 @@ import 'dart:async';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
-import 'package:url_launcher/url_launcher.dart';
 import '../data/database_helper.dart';
 import '../services/relay_client.dart';
 import '../services/native_audio_service.dart';
@@ -49,15 +48,40 @@ class _RecentsScreenState extends State<RecentsScreen> {
     final logs = await DatabaseHelper.instance.getCallLogs(missedOnly: false);
     final contacts = await DatabaseHelper.instance.getContacts();
     final Map<String, String> contactIdMap = {};
+    final Map<String, String> contactNameMap = {};
     for (final c in contacts) {
       for (final p in c.phoneNumbers) {
         contactIdMap[p.normalizedNumber] = c.id;
         contactIdMap[p.rawNumber] = c.id;
+        contactNameMap[p.normalizedNumber] = c.displayName;
+        contactNameMap[p.rawNumber] = c.displayName;
       }
     }
+
+    final resolvedLogs = logs.map((log) {
+      if (log.callerName.isNotEmpty && log.callerName != log.remoteNumber) {
+        return log;
+      }
+      final norm = PhoneNumberNormalizer.normalize(log.remoteNumber);
+      final matchedName = contactNameMap[norm] ?? contactNameMap[log.remoteNumber];
+      if (matchedName != null && matchedName.isNotEmpty) {
+        return CallLogModel(
+          id: log.id,
+          remoteNumber: log.remoteNumber,
+          callerName: matchedName,
+          numberLabel: log.numberLabel,
+          callType: log.callType,
+          serviceType: log.serviceType,
+          durationSeconds: log.durationSeconds,
+          timestamp: log.timestamp,
+        );
+      }
+      return log;
+    }).toList();
+
     if (mounted) {
       setState(() {
-        _logs = logs;
+        _logs = resolvedLogs;
         _contactIdByNumber = contactIdMap;
         _isLoading = false;
       });
@@ -236,7 +260,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
                                 ),
                                 const SizedBox(width: 3),
                                 Text(
-                                  'Rang for ${log.durationSeconds}s',
+                                  '${log.durationSeconds}s',
                                   style: const TextStyle(
                                     color: Color(0xFFFF453A),
                                     fontSize: 11,
@@ -341,6 +365,8 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
   List<CallRecordingModel>? _recordings;
   bool _isLoadingRecordings = true;
   String? _contactId;
+  final Map<String, String> _localRecordingPaths = {};
+  final Set<String> _downloadingFiles = {};
 
   @override
   void initState() {
@@ -366,18 +392,84 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
         _isLoadingRecordings = false;
       });
     }
+
+    // Check which recordings already exist locally on iPhone
+    for (final rec in list) {
+      final local = await RelayClient.instance.getLocalRecordingPath(rec.filename);
+      if (local != null && mounted) {
+        setState(() {
+          _localRecordingPaths[rec.filename] = local;
+        });
+      }
+    }
   }
 
   Future<void> _togglePlayRecording(CallRecordingModel recording) async {
-    final url = RelayClient.instance.getRecordingAudioUrl(recording.filename);
-    final state = NativeAudioService.instance.currentState;
+    if (_downloadingFiles.contains(recording.filename)) return;
 
-    if (state.activeUrl == url && state.isPlaying) {
+    // Check if downloaded locally, if not download over network first
+    String? localPath = _localRecordingPaths[recording.filename];
+    if (localPath == null) {
+      setState(() => _downloadingFiles.add(recording.filename));
+      localPath = await RelayClient.instance.downloadRecordingAudio(recording.filename);
+      if (mounted) {
+        setState(() {
+          _downloadingFiles.remove(recording.filename);
+          if (localPath != null) {
+            _localRecordingPaths[recording.filename] = localPath;
+          }
+        });
+      }
+    }
+
+    if (localPath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not download audio from Vivo host. Check hotspot/Wi-Fi connection.'),
+            backgroundColor: Color(0xFFFF3B30),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    final state = NativeAudioService.instance.currentState;
+    if (state.activeUrl == localPath && state.isPlaying) {
       await NativeAudioService.instance.pause();
-    } else if (state.activeUrl == url && !state.isPlaying) {
+    } else if (state.activeUrl == localPath && !state.isPlaying) {
       await NativeAudioService.instance.resume();
     } else {
-      await NativeAudioService.instance.play(url);
+      await NativeAudioService.instance.play(localPath);
+    }
+  }
+
+  Future<void> _shareRecording(CallRecordingModel recording) async {
+    String? localPath = _localRecordingPaths[recording.filename];
+    if (localPath == null) {
+      setState(() => _downloadingFiles.add(recording.filename));
+      localPath = await RelayClient.instance.downloadRecordingAudio(recording.filename);
+      if (mounted) {
+        setState(() {
+          _downloadingFiles.remove(recording.filename);
+          if (localPath != null) {
+            _localRecordingPaths[recording.filename] = localPath;
+          }
+        });
+      }
+    }
+
+    if (localPath != null) {
+      await NativeAudioService.instance.shareFile(localPath);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not prepare file for sharing.'),
+          backgroundColor: Color(0xFFFF3B30),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
     }
   }
 
@@ -457,7 +549,7 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                         Text(
                           isMissed
                               ? (widget.log.durationSeconds > 0
-                                  ? 'Missed Call • Rang for ${widget.log.durationSeconds} seconds'
+                                  ? 'Missed Call • ${widget.log.durationSeconds}s'
                                   : 'Missed Call')
                               : (widget.log.callType == CallType.outgoing
                                   ? 'Outgoing Call • ${widget.log.durationFormatted}'
@@ -593,8 +685,11 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                     mainAxisSize: MainAxisSize.min,
                     children: _recordings!.map((rec) {
                       final recUrl = RelayClient.instance.getRecordingAudioUrl(rec.filename);
-                      final isThisPlaying = audioState.activeUrl == recUrl && audioState.isPlaying;
-                      final isThisActive = audioState.activeUrl == recUrl;
+                      final localPath = _localRecordingPaths[rec.filename];
+                      final isDownloaded = localPath != null;
+                      final isDownloading = _downloadingFiles.contains(rec.filename);
+                      final isThisPlaying = (audioState.activeUrl == localPath || audioState.activeUrl == recUrl) && audioState.isPlaying;
+                      final isThisActive = (audioState.activeUrl == localPath || audioState.activeUrl == recUrl);
 
                       return Container(
                         margin: const EdgeInsets.only(bottom: 8),
@@ -607,7 +702,7 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                           border: Border.all(
                             color: isThisActive
                                 ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.4)
-                                : Colors.white.withValues(alpha: 0.1),
+                                : (isDownloaded ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.1)),
                             width: 0.75,
                           ),
                         ),
@@ -628,15 +723,23 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                                     decoration: BoxDecoration(
                                       color: isThisPlaying
                                           ? LiquidGlassTheme.iosBlue
-                                          : Colors.white.withValues(alpha: 0.16),
+                                          : (isDownloaded
+                                              ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.25)
+                                              : Colors.white.withValues(alpha: 0.16)),
                                       shape: BoxShape.circle,
                                     ),
                                     alignment: Alignment.center,
-                                    child: Icon(
-                                      isThisPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
-                                      color: Colors.white,
-                                      size: 22,
-                                    ),
+                                    child: isDownloading
+                                        ? const SizedBox(
+                                            width: 18,
+                                            height: 18,
+                                            child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
+                                          )
+                                        : Icon(
+                                            isThisPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                            color: isDownloaded && !isThisPlaying ? LiquidGlassTheme.gsmGreen : Colors.white,
+                                            size: 22,
+                                          ),
                                   ),
                                 ),
                                 const SizedBox(width: 12),
@@ -644,13 +747,55 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                                   child: Column(
                                     crossAxisAlignment: CrossAxisAlignment.start,
                                     children: [
-                                      Text(
-                                        rec.dateFormatted,
-                                        style: const TextStyle(
-                                          color: Colors.white,
-                                          fontSize: 13,
-                                          fontWeight: FontWeight.w600,
-                                        ),
+                                      Row(
+                                        children: [
+                                          Flexible(
+                                            child: Text(
+                                              rec.dateFormatted,
+                                              style: const TextStyle(
+                                                color: Colors.white,
+                                                fontSize: 13,
+                                                fontWeight: FontWeight.w600,
+                                              ),
+                                              overflow: TextOverflow.ellipsis,
+                                            ),
+                                          ),
+                                          const SizedBox(width: 6),
+                                          Container(
+                                            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                            decoration: BoxDecoration(
+                                              color: isDownloaded
+                                                  ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.2)
+                                                  : Colors.white.withValues(alpha: 0.08),
+                                              borderRadius: BorderRadius.circular(6),
+                                              border: Border.all(
+                                                color: isDownloaded
+                                                    ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4)
+                                                    : Colors.white12,
+                                                width: 0.5,
+                                              ),
+                                            ),
+                                            child: Row(
+                                              mainAxisSize: MainAxisSize.min,
+                                              children: [
+                                                Icon(
+                                                  isDownloaded ? Icons.check_circle_rounded : Icons.cloud_download_outlined,
+                                                  size: 10,
+                                                  color: isDownloaded ? LiquidGlassTheme.gsmGreen : Colors.white70,
+                                                ),
+                                                const SizedBox(width: 3),
+                                                Text(
+                                                  isDownloaded ? 'iPhone Native File' : 'Vivo Host',
+                                                  style: TextStyle(
+                                                    fontSize: 9.5,
+                                                    fontWeight: FontWeight.w600,
+                                                    color: isDownloaded ? LiquidGlassTheme.gsmGreen : Colors.white70,
+                                                  ),
+                                                ),
+                                              ],
+                                            ),
+                                          ),
+                                        ],
                                       ),
                                       const SizedBox(height: 2),
                                       Text(
@@ -665,13 +810,15 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                                     ],
                                   ),
                                 ),
-                                // Open in Safari / Share
+                                // Native iOS Share Button
                                 IconButton(
-                                  icon: const Icon(Icons.share_outlined, color: Colors.white70, size: 18),
-                                  onPressed: () {
-                                    launchUrl(Uri.parse(recUrl), mode: LaunchMode.externalApplication);
-                                  },
-                                  tooltip: 'Open in Safari / Share',
+                                  icon: Icon(
+                                    Icons.share_rounded,
+                                    color: isDownloaded ? LiquidGlassTheme.iosBlue : Colors.white70,
+                                    size: 18,
+                                  ),
+                                  onPressed: () => _shareRecording(rec),
+                                  tooltip: 'Share Native Audio File',
                                 ),
                               ],
                             ),

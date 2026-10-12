@@ -148,6 +148,8 @@ class _HostMainNavigationState extends State<HostMainNavigation> {
       SettingsScreen(
         server: widget.server,
         telephonyController: widget.telephonyController,
+        telemetry: widget.telemetry,
+        hotspotService: widget.hotspotService,
       ),
     ];
 

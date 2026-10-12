@@ -3,6 +3,7 @@ import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:http/http.dart' as http;
+import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 import 'package:web_socket_channel/web_socket_channel.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -162,9 +163,58 @@ class RelayClient {
     _startReconnectLoop();
   }
 
-  /// Instant HTTP check of the local Hotspot / Wi-Fi router gateway
+  int lastPingLatencyMs = 0;
+  int _lastPingSentTimestamp = 0;
+
+  /// Fast parallel HTTP sweep across a /24 subnet (e.g. 192.168.1.1 .. 254)
+  Future<String?> sweepSubnet(String prefix) async {
+    logDiagnostic('⚡ Starting parallel subnet sweep on $prefix.0/24...');
+    final client = http.Client();
+    try {
+      final futures = <Future<String?>>[];
+      for (int i = 1; i <= 254; i++) {
+        final ip = '$prefix.$i';
+        futures.add(() async {
+          try {
+            final uri = Uri.parse('http://$ip:$hostPort/api/status');
+            final res = await client.get(uri).timeout(const Duration(milliseconds: 350));
+            if (res.statusCode == 200 && res.body.contains('pta_host')) {
+              return ip;
+            }
+          } catch (_) {}
+          return null;
+        }());
+      }
+
+      final results = await Future.wait(futures);
+      final found = results.firstWhere((ip) => ip != null, orElse: () => null);
+      if (found != null) {
+        logDiagnostic('⚡ Subnet sweep matched host: $found');
+        return found;
+      }
+    } finally {
+      client.close();
+    }
+    return null;
+  }
+
+  /// Instant check of the local Hotspot / Wi-Fi router gateway
   Future<String?> probeDirectGateway() async {
     try {
+      // 1. Auto-detect if connected to Vivo S1 Hotspot (192.168.43.x)
+      try {
+        final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+        for (final iface in interfaces) {
+          for (final addr in iface.addresses) {
+            if (addr.address.startsWith('192.168.43.')) {
+              logDiagnostic('⚡ Connected to Vivo S1 Hotspot subnet (192.168.43.x). Auto-locking 192.168.43.1!');
+              return '192.168.43.1';
+            }
+          }
+        }
+      } catch (_) {}
+
+      // 2. Direct gateway probes
       final candidateIps = <String>{'192.168.43.1', '192.168.23.1', '192.168.1.1'};
       try {
         final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
@@ -181,7 +231,7 @@ class RelayClient {
       for (final ip in candidateIps) {
         try {
           final uri = Uri.parse('http://$ip:$hostPort/api/status');
-          final res = await http.get(uri).timeout(const Duration(milliseconds: 600));
+          final res = await http.get(uri).timeout(const Duration(milliseconds: 400));
           if (res.statusCode == 200) {
             logDiagnostic('⚡ Gateway direct-probe found host: $ip');
             return ip;
@@ -192,9 +242,9 @@ class RelayClient {
     return null;
   }
 
-  /// UDP Broadcast & Direct Gateway Auto-Discovery
+  /// High-Speed Multi-Layer Auto-Discovery (Hotspot Auto-Lock -> Subnet Sweep -> UDP Broadcast)
   Future<String?> discoverHostIp() async {
-    // 1. First probe Hotspot / Wi-Fi Gateway (<subnet>.1) directly for instant sub-600ms match
+    // 1. Check Hotspot / Gateway direct probe (0 ms for Hotspot)
     final directIp = await probeDirectGateway();
     if (directIp != null && directIp.isNotEmpty) {
       hostIp = directIp;
@@ -203,15 +253,34 @@ class RelayClient {
       return directIp;
     }
 
+    // 2. High-speed parallel subnet sweep (bypasses router AP isolation / UDP block)
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final parts = addr.address.split('.');
+          if (parts.length == 4 && parts[0] != '127') {
+            final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+            final swept = await sweepSubnet(prefix);
+            if (swept != null) {
+              hostIp = swept;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('host_ip', hostIp);
+              return swept;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    // 3. Fallback UDP Broadcast Probe
     try {
       final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       socket.broadcastEnabled = true;
       final msg = 'PTA_DISCOVER_REQUEST'.codeUnits;
 
-      // Broadcast to standard broadcast address & port 8081
       socket.send(msg, InternetAddress('255.255.255.255'), 8081);
 
-      // Probe common Android hotspot default gateways (Vivo / Samsung / Pixel)
       const commonHotspotGateways = [
         '192.168.43.1',
         '192.168.170.1',
@@ -223,7 +292,6 @@ class RelayClient {
         socket.send(msg, InternetAddress(gw), 8081);
       }
 
-      // Probe active local subnets
       final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
       for (final iface in interfaces) {
         for (final addr in iface.addresses) {
@@ -231,8 +299,6 @@ class RelayClient {
           if (parts.length == 4) {
             final subnetBroadcast = '${parts[0]}.${parts[1]}.${parts[2]}.255';
             socket.send(msg, InternetAddress(subnetBroadcast), 8081);
-            final hotspotGateway = '${parts[0]}.${parts[1]}.${parts[2]}.1';
-            socket.send(msg, InternetAddress(hotspotGateway), 8081);
           }
         }
       }
@@ -403,19 +469,29 @@ class RelayClient {
     _connectionController.add(false);
   }
 
+  bool isAppPaused = false;
+
+  /// Dispatched from native Swift UDP receiver when screen is locked or on dry Wi-Fi link
+  void handleNativeUdpFrame(String raw) {
+    logDiagnostic('UDP Frame received via Native Swift Bridge: ${raw.length > 80 ? "${raw.substring(0, 80)}..." : raw}');
+    _onMessageReceived(raw);
+  }
+
   void _startPingHeartbeat() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 8), (_) {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
-        if (elapsedSincePong > 30000) {
-          logDiagnostic('Ping watchdog timeout (>30s no pong). Disconnecting to trigger instant reconnect.');
+        // Avoid aggressive disconnect if app is in background/screen locked where iOS coalesces timers
+        if (elapsedSincePong > 90000 && !isAppPaused) {
+          logDiagnostic('Ping watchdog timeout (>90s no pong). Disconnecting to trigger instant reconnect.');
           disconnect();
           connect();
           return;
         }
         try {
+          _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
           _channel!.sink.add(RelayMessage.ping().toJsonString());
         } catch (e) {
           logDiagnostic('Ping Send Error: $e');
@@ -427,6 +503,7 @@ class RelayClient {
   }
 
   void onAppResumed() {
+    isAppPaused = false;
     logDiagnostic('App Resumed from screen lock/background');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
     if (!_isConnected || _channel == null) {
@@ -445,6 +522,7 @@ class RelayClient {
   }
 
   void onAppPaused() {
+    isAppPaused = true;
     logDiagnostic('App entered background/screen locked');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
   }
@@ -495,6 +573,9 @@ class RelayClient {
       switch (msg.type) {
         case 'PONG':
           _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+          if (_lastPingSentTimestamp > 0) {
+            lastPingLatencyMs = _lastPongTime - _lastPingSentTimestamp;
+          }
           break;
 
         case 'WEBRTC_OFFER':
@@ -937,6 +1018,78 @@ class RelayClient {
   /// URL for streaming or downloading a specific recording file from the Vivo S1 host
   String getRecordingAudioUrl(String filename) {
     return 'http://$hostIp:$hostPort/api/recordings/audio?file=${Uri.encodeComponent(filename)}';
+  }
+
+  /// Checks if a call recording audio file already exists locally in iPhone storage
+  Future<String?> getLocalRecordingPath(String filename) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final localFile = File('${dir.path}/recordings/$filename');
+      if (await localFile.exists() && await localFile.length() > 0) {
+        return localFile.path;
+      }
+    } catch (_) {}
+    return null;
+  }
+
+  /// Downloads Vivo S1 call recording audio over the local network and caches it
+  /// as a native audio file on the iPhone file system.
+  Future<String?> downloadRecordingAudio(String filename) async {
+    try {
+      final dir = await getApplicationDocumentsDirectory();
+      final recordingsDir = Directory('${dir.path}/recordings');
+      if (!await recordingsDir.exists()) {
+        await recordingsDir.create(recursive: true);
+      }
+      final localFile = File('${recordingsDir.path}/$filename');
+      if (await localFile.exists() && await localFile.length() > 0) {
+        return localFile.path;
+      }
+
+      final url = getRecordingAudioUrl(filename);
+      logDiagnostic('📥 Downloading recording over network: $filename from $url');
+      final res = await http.get(Uri.parse(url)).timeout(const Duration(seconds: 30));
+      if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
+        await localFile.writeAsBytes(res.bodyBytes, flush: true);
+        logDiagnostic('✅ Saved recording as native iPhone file: ${localFile.path} (${res.bodyBytes.length} bytes)');
+        return localFile.path;
+      } else {
+        logDiagnostic('❌ Failed to download recording ($filename): status ${res.statusCode}');
+      }
+    } catch (e) {
+      logDiagnostic('❌ Error downloading recording ($filename): $e');
+    }
+    return null;
+  }
+
+  /// Directly tests roundtrip network latency to the Vivo S1 host in milliseconds
+  Future<int> measurePingLatency() async {
+    final start = DateTime.now().millisecondsSinceEpoch;
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/status');
+      final res = await http.get(uri).timeout(const Duration(milliseconds: 1500));
+      if (res.statusCode == 200) {
+        final elapsed = DateTime.now().millisecondsSinceEpoch - start;
+        lastPingLatencyMs = elapsed;
+        return elapsed;
+      }
+    } catch (_) {}
+    return -1;
+  }
+
+  /// Returns the current local IPv4 address of this iPhone on Wi-Fi/Hotspot
+  Future<String?> getCurrentLocalIp() async {
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          if (!addr.isLoopback && (addr.address.startsWith('192.168.') || addr.address.startsWith('10.') || addr.address.startsWith('172.'))) {
+            return addr.address;
+          }
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 }
 

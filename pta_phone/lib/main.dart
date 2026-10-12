@@ -166,7 +166,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
                       ),
                       Text(
                         log.durationSeconds > 0
-                            ? '${PhoneNumberNormalizer.formatForDisplay(log.remoteNumber)} • Rang for ${log.durationSeconds}s'
+                            ? '${PhoneNumberNormalizer.formatForDisplay(log.remoteNumber)} • ${log.durationSeconds}s'
                             : PhoneNumberNormalizer.formatForDisplay(log.remoteNumber),
                         style: const TextStyle(color: Colors.white70, fontSize: 11),
                       ),
@@ -250,6 +250,23 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
         final number = call.arguments['number']?.toString() ?? '';
         if (number.isNotEmpty) {
           RelayClient.instance.dialNumber(number);
+        }
+      } else if (call.method == 'onNativeIncomingCall') {
+        final number = call.arguments['number']?.toString() ?? '';
+        final name = call.arguments['name']?.toString() ?? '';
+        final callId = call.arguments['callId']?.toString() ?? CallKitService.generateUuid();
+        if (number.isNotEmpty) {
+          debugPrint('[NATIVE_BRIDGE] 📞 Received native incoming call intent for $number ($name)');
+          await CallKitService.instance.showIncomingCall(
+            callId: callId,
+            callerName: name.isNotEmpty ? name : number,
+            handle: number,
+          );
+        }
+      } else if (call.method == 'onNativeUdpFrame') {
+        final raw = call.arguments?.toString() ?? '';
+        if (raw.isNotEmpty) {
+          RelayClient.instance.handleNativeUdpFrame(raw);
         }
       }
     });

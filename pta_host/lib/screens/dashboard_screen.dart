@@ -332,10 +332,11 @@ class _DashboardScreenState extends State<DashboardScreen> {
               mainAxisSpacing: 8,
               children: [
                 _buildStatusTile(
-                  icon: Icons.wifi,
+                  icon: Icons.wifi_tethering_rounded,
                   title: 'Host Network IP',
                   subtitle: widget.telemetry.localIp,
                   color: Colors.teal,
+                  onTap: () => _showPairingDialog(context),
                 ),
                 _buildStatusTile(
                   icon: Icons.devices,
@@ -393,35 +394,162 @@ class _DashboardScreenState extends State<DashboardScreen> {
     );
   }
 
+  void _showPairingDialog(BuildContext context) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(24)),
+        title: const Row(
+          children: [
+            Icon(Icons.wifi_tethering_rounded, color: Colors.green),
+            SizedBox(width: 10),
+            Text('Pairing & Network Hub', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 18)),
+          ],
+        ),
+        content: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: [
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: Colors.green.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(color: Colors.green.withValues(alpha: 0.3)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  const Text('⚡ Primary Pairing Endpoint:', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 12, color: Colors.green)),
+                  const SizedBox(height: 4),
+                  SelectableText(
+                    'ws://${widget.telemetry.localIp}:${RelayServer.port}/ws',
+                    style: const TextStyle(fontFamily: 'monospace', fontSize: 15, fontWeight: FontWeight.bold),
+                  ),
+                ],
+              ),
+            ),
+            const SizedBox(height: 14),
+            _buildDialogNetRow(
+              icon: Icons.wifi_tethering,
+              label: 'Vivo Hotspot AP (Fixed)',
+              value: '${widget.telemetry.hotspotIp}:${RelayServer.port}',
+              isStatic: true,
+            ),
+            const SizedBox(height: 8),
+            _buildDialogNetRow(
+              icon: Icons.wifi,
+              label: 'Wi-Fi LAN (Home Router)',
+              value: widget.telemetry.wifiIp.isNotEmpty ? '${widget.telemetry.wifiIp}:${RelayServer.port}' : 'Not connected',
+              isStatic: false,
+            ),
+            const SizedBox(height: 8),
+            _buildDialogNetRow(
+              icon: Icons.cell_tower,
+              label: 'Zong SIM WAN (Mobile Data)',
+              value: widget.telemetry.cellularIp.isNotEmpty ? widget.telemetry.cellularIp : 'Inactive',
+              isStatic: false,
+            ),
+            const SizedBox(height: 12),
+            Container(
+              padding: const EdgeInsets.all(10),
+              decoration: BoxDecoration(
+                color: Colors.grey.withValues(alpha: 0.1),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: const Text(
+                '💡 Tip: On Vivo Hotspot, the address is ALWAYS 192.168.43.1. Your iPhone auto-locks to this address with zero typing needed.',
+                style: TextStyle(fontSize: 11, color: Colors.black87),
+              ),
+            ),
+          ],
+        ),
+        actions: [
+          TextButton.icon(
+            icon: const Icon(Icons.radar),
+            label: const Text('Send Beacon'),
+            onPressed: () {
+              widget.server.broadcastUdpBurst(RelayMessage.ping());
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('⚡ Pairing beacon broadcasted to network!')),
+              );
+              Navigator.pop(ctx);
+            },
+          ),
+          FilledButton.icon(
+            icon: const Icon(Icons.copy),
+            label: const Text('Copy Endpoint'),
+            onPressed: () {
+              Clipboard.setData(ClipboardData(text: 'ws://${widget.telemetry.localIp}:${RelayServer.port}/ws'));
+              ScaffoldMessenger.of(context).showSnackBar(
+                const SnackBar(content: Text('Endpoint copied to clipboard!')),
+              );
+              Navigator.pop(ctx);
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _buildDialogNetRow({required IconData icon, required String label, required String value, required bool isStatic}) {
+    return Row(
+      children: [
+        Icon(icon, size: 18, color: isStatic ? Colors.green : Colors.grey.shade700),
+        const SizedBox(width: 8),
+        Expanded(
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              Text(label, style: const TextStyle(fontSize: 11, color: Colors.grey)),
+              Text(value, style: TextStyle(fontSize: 12, fontWeight: isStatic ? FontWeight.bold : FontWeight.w500, color: isStatic ? Colors.green.shade800 : Colors.black87)),
+            ],
+          ),
+        ),
+        if (isStatic)
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+            decoration: BoxDecoration(color: Colors.green.withValues(alpha: 0.15), borderRadius: BorderRadius.circular(6)),
+            child: const Text('STATIC', style: TextStyle(fontSize: 9, fontWeight: FontWeight.bold, color: Colors.green)),
+          ),
+      ],
+    );
+  }
+
   Widget _buildStatusTile({
     required IconData icon,
     required String title,
     required String subtitle,
     required Color color,
+    VoidCallback? onTap,
   }) {
     return Card(
       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
-      child: Padding(
-        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-        child: Row(
-          children: [
-            CircleAvatar(
-              radius: 18,
-              backgroundColor: color.withValues(alpha: 0.15),
-              child: Icon(icon, size: 20, color: color),
-            ),
-            const SizedBox(width: 10),
-            Expanded(
-              child: Column(
-                mainAxisAlignment: MainAxisAlignment.center,
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), maxLines: 1),
-                  Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade600), maxLines: 1),
-                ],
+      child: InkWell(
+        borderRadius: BorderRadius.circular(16),
+        onTap: onTap,
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
+          child: Row(
+            children: [
+              CircleAvatar(
+                radius: 18,
+                backgroundColor: color.withValues(alpha: 0.15),
+                child: Icon(icon, size: 20, color: color),
               ),
-            ),
-          ],
+              const SizedBox(width: 10),
+              Expanded(
+                child: Column(
+                  mainAxisAlignment: MainAxisAlignment.center,
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(title, style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 13), maxLines: 1),
+                    Text(subtitle, style: TextStyle(fontSize: 11, color: Colors.grey.shade600), maxLines: 1),
+                  ],
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

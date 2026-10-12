@@ -121,6 +121,13 @@ class DatabaseHelper {
             },
             conflictAlgorithm: ConflictAlgorithm.replace,
           );
+
+          // Permanently backfill call_logs with newly synced contact names
+          await txn.rawUpdate('''
+            UPDATE call_logs 
+            SET caller_name = ? 
+            WHERE (remote_number = ? OR remote_number = ?) AND (caller_name IS NULL OR caller_name = '' OR caller_name = remote_number)
+          ''', [contact.displayName, item.normalizedNumber, item.rawNumber]);
         }
       }
     });
@@ -231,12 +238,20 @@ class DatabaseHelper {
 
   Future<void> saveCallLog(CallLogModel log) async {
     final db = await database;
+    var nameToStore = log.callerName.trim();
+    if (nameToStore.isEmpty || nameToStore == log.remoteNumber) {
+      final matchedContact = await findContactByNumber(log.remoteNumber);
+      if (matchedContact != null) {
+        nameToStore = matchedContact.displayName;
+      }
+    }
+
     await db.insert(
       'call_logs',
       {
         'id': log.id,
         'remote_number': log.remoteNumber,
-        'caller_name': log.callerName,
+        'caller_name': nameToStore,
         'number_label': log.numberLabel,
         'call_type': log.callType.name,
         'service_type': log.serviceType.name,
@@ -305,12 +320,12 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<SmsMessageModel>> getMessages() async {
+  Future<List<SmsMessageModel>> getMessages({int limit = 500}) async {
     final db = await database;
     final rows = await db.query(
       'messages',
       orderBy: 'timestamp DESC',
-      limit: 100,
+      limit: limit,
     );
 
     return rows.map((r) {
@@ -332,6 +347,16 @@ class DatabaseHelper {
       {'is_read': 1},
       where: 'id = ?',
       whereArgs: [id],
+    );
+  }
+
+  Future<void> markThreadRead(String address) async {
+    final db = await database;
+    await db.update(
+      'messages',
+      {'is_read': 1},
+      where: 'sender = ? OR sender = ?',
+      whereArgs: [address, 'To: $address'],
     );
   }
 
