@@ -517,10 +517,6 @@ import UserNotifications
         sendDialIntent(handle)
         return
       }
-      if let callRecord = intent.callRecordToStart, let handle = callRecord.caller?.personHandle?.value, !handle.isEmpty {
-        sendDialIntent(handle)
-        return
-      }
     }
 
     if let phone = userActivity.userInfo?["phoneNumber"] as? String, !phone.isEmpty {
