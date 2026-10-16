@@ -502,7 +502,11 @@ class RelayServer {
   if (path == 'api/recordings/latest') {
     final limitStr = request.url.queryParameters['limit'] ?? '10';
     final limit = int.tryParse(limitStr) ?? 10;
-    final recordings = await VivoRecordingService.instance.getLatestRecordings(limit: limit);
+    final recordings = await VivoRecordingService.instance.getLatestRecordings(
+      limit: limit,
+      cachedCallHistory: cachedCallHistory,
+      cachedContacts: cachedContacts,
+    );
     final list = recordings.map((r) => r.toJson()).toList();
     return Response.ok(jsonEncode(list), headers: {
       'content-type': 'application/json',
@@ -524,6 +528,8 @@ class RelayServer {
     final recordings = await VivoRecordingService.instance.getRecordingsForNumber(
       number,
       contactNames: contactNames,
+      cachedCallHistory: cachedCallHistory,
+      cachedContacts: cachedContacts,
     );
     final list = recordings.map((r) => r.toJson()).toList();
     return Response.ok(jsonEncode(list), headers: {

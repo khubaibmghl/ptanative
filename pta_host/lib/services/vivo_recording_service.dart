@@ -45,10 +45,113 @@ class VivoRecordingService {
     return dirs;
   }
 
+  /// Intelligently parses filename and correlates with Android Call History to accurately determine
+  /// the phone number, contact name, and duration of the call recording.
+  CallRecordingModel parseRecordingMetadata(
+    File file,
+    FileStat stat, {
+    String? filterNumber,
+    List<CallLogModel>? cachedCallHistory,
+    List<ContactModel>? cachedContacts,
+  }) {
+    final path = file.path;
+    final filename = path.split(Platform.pathSeparator).last;
+    final dotIndex = filename.lastIndexOf('.');
+    final nameWithoutExt = dotIndex != -1 ? filename.substring(0, dotIndex) : filename;
+    final fileTime = stat.modified.millisecondsSinceEpoch;
+
+    String resolvedNumber = (filterNumber != null && filterNumber.isNotEmpty) ? filterNumber : '';
+    String resolvedName = '';
+    int resolvedDuration = 0;
+
+    // 1. High-Precision Correlation: Match against Android Call History by timestamp
+    // Vivo call recording files are saved immediately when the call finishes (within 0-120s of call end).
+    if (cachedCallHistory != null && cachedCallHistory.isNotEmpty) {
+      CallLogModel? closestMatch;
+      int minDiff = 120000; // 2 minute threshold
+
+      for (final log in cachedCallHistory) {
+        // Calculate estimated call completion time: call start + duration
+        final callEndEst = log.timestamp + (log.durationSeconds * 1000);
+        final diffEnd = (fileTime - callEndEst).abs();
+        final diffStart = (fileTime - log.timestamp).abs();
+        final diff = diffEnd < diffStart ? diffEnd : diffStart;
+
+        if (diff < minDiff) {
+          minDiff = diff;
+          closestMatch = log;
+        }
+      }
+
+      if (closestMatch != null) {
+        resolvedNumber = closestMatch.remoteNumber;
+        resolvedName = closestMatch.callerName;
+        resolvedDuration = closestMatch.durationSeconds;
+      }
+    }
+
+    // 2. Parse phone number and name tokens from filename if not yet resolved
+    final tokens = nameWithoutExt.split(RegExp(r'[_ \-@]'));
+    for (final token in tokens) {
+      final trimmed = token.trim();
+      final digits = trimmed.replaceAll(RegExp(r'\D'), '');
+
+      // Identify timestamp token (e.g. 20261016... or 14-digit epoch)
+      final isDateToken = (digits.startsWith('202') && digits.length >= 8) || digits.length == 14 || digits.length == 6;
+
+      if (!isDateToken && digits.length >= 7 && digits.length <= 15) {
+        // Valid phone number token
+        if (resolvedNumber.isEmpty) {
+          resolvedNumber = trimmed;
+        }
+      } else if (trimmed.length >= 2 && !RegExp(r'^\d+$').hasMatch(trimmed)) {
+        final lower = trimmed.toLowerCase();
+        if (lower != 'call' && lower != 'record' && lower != 'recorder' && lower != 'voice' && lower != 'audio' && lower != 'sound') {
+          if (resolvedName.isEmpty) {
+            resolvedName = trimmed;
+          }
+        }
+      }
+    }
+
+    // 3. Match against Contacts cache to resolve missing names or numbers
+    if (cachedContacts != null && cachedContacts.isNotEmpty) {
+      if (resolvedNumber.isNotEmpty && (resolvedName.isEmpty || resolvedName == resolvedNumber)) {
+        for (final c in cachedContacts) {
+          if (c.matchesNumber(resolvedNumber)) {
+            resolvedName = c.displayName;
+            break;
+          }
+        }
+      } else if (resolvedNumber.isEmpty && resolvedName.isNotEmpty) {
+        for (final c in cachedContacts) {
+          if (c.displayName.toLowerCase() == resolvedName.toLowerCase()) {
+            if (c.phoneNumbers.isNotEmpty) {
+              resolvedNumber = c.phoneNumbers.first.rawNumber;
+              break;
+            }
+          }
+        }
+      }
+    }
+
+    return CallRecordingModel(
+      filename: filename,
+      filePath: path,
+      remoteNumber: resolvedNumber,
+      callerName: resolvedName,
+      timestamp: fileTime,
+      sizeBytes: stat.size,
+      durationSeconds: resolvedDuration,
+    );
+  }
+
   /// Finds all recordings matching a given phone number or contact
   Future<List<CallRecordingModel>> getRecordingsForNumber(
     String rawNumber, {
     List<String> contactNames = const [],
+    List<CallLogModel>? cachedCallHistory,
+    List<ContactModel>? cachedContacts,
   }) async {
     final List<CallRecordingModel> results = [];
     final normNumber = PhoneNumberNormalizer.normalize(rawNumber);
@@ -57,6 +160,7 @@ class VivoRecordingService {
         : normNumber;
 
     final existingDirs = getExistingDirectories();
+    final Set<String> seenFilenames = {};
     debugPrint('[VIVO_RECORDINGS] Scanning ${existingDirs.length} existing directories for $rawNumber (sig: $significantDigits)');
 
     for (final dir in existingDirs) {
@@ -65,29 +169,51 @@ class VivoRecordingService {
         for (final entity in entities) {
           if (entity is! File) continue;
 
-          final path = entity.path;
-          final filename = path.split(Platform.pathSeparator).last;
-          final lowerExt = filename.toLowerCase();
+          final filename = entity.path.split(Platform.pathSeparator).last;
+          if (seenFilenames.contains(filename)) continue;
 
+          final lowerExt = filename.toLowerCase();
           final hasValidExt = validExtensions.any((ext) => lowerExt.endsWith(ext));
           if (!hasValidExt) continue;
 
-          // Check if filename contains phone digits or contact names
+          final stat = entity.statSync();
+          final parsed = parseRecordingMetadata(
+            entity,
+            stat,
+            cachedCallHistory: cachedCallHistory,
+            cachedContacts: cachedContacts,
+          );
+
           bool matches = false;
-          final cleanFilenameDigits = filename.replaceAll(RegExp(r'\D'), '');
 
-          if (significantDigits.isNotEmpty &&
-              (cleanFilenameDigits.contains(significantDigits) || filename.contains(significantDigits))) {
-            matches = true;
+          // 1. Direct number match against parsed model
+          if (parsed.remoteNumber.isNotEmpty) {
+            final parsedNorm = PhoneNumberNormalizer.normalize(parsed.remoteNumber);
+            final parsedSig = parsedNorm.length >= 7 ? parsedNorm.substring(parsedNorm.length - 7) : parsedNorm;
+            if (parsedSig.isNotEmpty && (significantDigits.contains(parsedSig) || parsedSig.contains(significantDigits))) {
+              matches = true;
+            }
           }
 
-          if (!matches && normNumber.isNotEmpty && filename.contains(normNumber)) {
-            matches = true;
-          }
-
-          if (!matches) {
+          // 2. Contact name match in parsed model
+          if (!matches && parsed.callerName != null && parsed.callerName!.isNotEmpty) {
             for (final name in contactNames) {
-              if (name.trim().isNotEmpty && filename.toLowerCase().contains(name.trim().toLowerCase())) {
+              if (name.trim().isNotEmpty && parsed.callerName!.toLowerCase().contains(name.trim().toLowerCase())) {
+                matches = true;
+                break;
+              }
+            }
+          }
+
+          // 3. Raw filename check for significant digits (ensuring it's not part of the date/time timestamp)
+          if (!matches && significantDigits.isNotEmpty) {
+            final dotIdx = filename.lastIndexOf('.');
+            final base = dotIdx != -1 ? filename.substring(0, dotIdx) : filename;
+            final tokens = base.split(RegExp(r'[_ \-@]'));
+            for (final token in tokens) {
+              final digits = token.replaceAll(RegExp(r'\D'), '');
+              final isDate = digits.startsWith('202') || digits.length == 14 || digits.length == 6;
+              if (!isDate && digits.length >= 7 && digits.contains(significantDigits)) {
                 matches = true;
                 break;
               }
@@ -95,17 +221,8 @@ class VivoRecordingService {
           }
 
           if (matches) {
-            try {
-              final stat = entity.statSync();
-              results.add(CallRecordingModel(
-                filename: filename,
-                filePath: path,
-                remoteNumber: rawNumber,
-                timestamp: stat.modified.millisecondsSinceEpoch,
-                sizeBytes: stat.size,
-                durationSeconds: 0,
-              ));
-            } catch (_) {}
+            seenFilenames.add(filename);
+            results.add(parsed);
           }
         }
       } catch (e) {
@@ -120,7 +237,11 @@ class VivoRecordingService {
   }
 
   /// Retrieves the latest call recordings across all directories regardless of number filter
-  Future<List<CallRecordingModel>> getLatestRecordings({int limit = 10}) async {
+  Future<List<CallRecordingModel>> getLatestRecordings({
+    int limit = 10,
+    List<CallLogModel>? cachedCallHistory,
+    List<ContactModel>? cachedContacts,
+  }) async {
     final List<CallRecordingModel> results = [];
     final existingDirs = getExistingDirectories();
     final Set<String> seenFilenames = {};
@@ -141,14 +262,13 @@ class VivoRecordingService {
           try {
             final stat = entity.statSync();
             seenFilenames.add(filename);
-            results.add(CallRecordingModel(
-              filename: filename,
-              filePath: entity.path,
-              remoteNumber: '',
-              timestamp: stat.modified.millisecondsSinceEpoch,
-              sizeBytes: stat.size,
-              durationSeconds: 0,
-            ));
+            final parsed = parseRecordingMetadata(
+              entity,
+              stat,
+              cachedCallHistory: cachedCallHistory,
+              cachedContacts: cachedContacts,
+            );
+            results.add(parsed);
           } catch (_) {}
         }
       } catch (e) {

@@ -1105,8 +1105,9 @@ class RelayClient {
       return localCached;
     }
 
-    // Fallback: return any recent recordings cached locally
-    return await DatabaseHelper.instance.getLocalRecordings(limit: 10);
+    // Strict isolation: Return empty list if no recording matches this specific number.
+    // Never fallback to returning recordings belonging to other contacts.
+    return [];
   }
 
   /// URL for streaming or downloading a specific recording file from the Vivo S1 host

@@ -427,8 +427,8 @@ class DatabaseHelper {
       final sig = norm.length >= 7 ? norm.substring(norm.length - 7) : norm;
       maps = await db.query(
         'call_recordings',
-        where: 'remote_number LIKE ? OR filename LIKE ?',
-        whereArgs: ['%$sig%', '%$sig%'],
+        where: 'remote_number LIKE ?',
+        whereArgs: ['%$sig%'],
         orderBy: 'timestamp DESC',
         limit: limit,
       );

@@ -133,14 +133,31 @@ class _RecentsScreenState extends State<RecentsScreen> {
         actions: [
           Padding(
             padding: const EdgeInsets.only(right: 16),
-            child: Container(
-              width: 36,
-              height: 36,
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
-                shape: BoxShape.circle,
+            child: InkWell(
+              borderRadius: BorderRadius.circular(16),
+              onTap: () => _showAllRecordingsSheet(context),
+              child: Container(
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+                  borderRadius: BorderRadius.circular(16),
+                ),
+                child: const Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    Icon(Icons.mic_rounded, color: LiquidGlassTheme.iosBlue, size: 16),
+                    SizedBox(width: 4),
+                    Text(
+                      'Recordings',
+                      style: TextStyle(
+                        color: LiquidGlassTheme.iosBlue,
+                        fontSize: 12,
+                        fontWeight: FontWeight.w600,
+                      ),
+                    ),
+                  ],
+                ),
               ),
-              child: const Icon(Icons.filter_list, color: LiquidGlassTheme.textPrimary, size: 20),
             ),
           ),
         ],
@@ -350,6 +367,15 @@ class _RecentsScreenState extends State<RecentsScreen> {
       builder: (ctx) => CallDetailsSheet(log: log),
     );
   }
+
+  void _showAllRecordingsSheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      isScrollControlled: true,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) => const AllRecordingsSheet(),
+    );
+  }
 }
 
 class CallDetailsSheet extends StatefulWidget {
@@ -406,12 +432,8 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
       }
     }
 
-    // 2. Query host/update cache
-    var list = await RelayClient.instance.fetchRecordings(widget.log.remoteNumber);
-    if (list.isEmpty) {
-      // Fallback to latest 10 synced recordings across all calls
-      list = await DatabaseHelper.instance.getLocalRecordings(limit: 10);
-    }
+    // 2. Query host/update cache for this specific contact
+    final list = await RelayClient.instance.fetchRecordings(widget.log.remoteNumber);
 
     if (mounted) {
       setState(() {
@@ -888,6 +910,513 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
               ),
           ],
         ),
+      ),
+    );
+  }
+}
+
+class AllRecordingsSheet extends StatefulWidget {
+  const AllRecordingsSheet({super.key});
+
+  @override
+  State<AllRecordingsSheet> createState() => _AllRecordingsSheetState();
+}
+
+class _AllRecordingsSheetState extends State<AllRecordingsSheet> {
+  List<CallRecordingModel> _recordings = [];
+  bool _isLoading = true;
+  bool _isSyncing = false;
+  String _searchQuery = '';
+  final Map<String, String> _localRecordingPaths = {};
+  final Set<String> _downloadingFiles = {};
+  final TextEditingController _searchCtrl = TextEditingController();
+
+  @override
+  void initState() {
+    super.initState();
+    _loadAllRecordings();
+  }
+
+  @override
+  void dispose() {
+    NativeAudioService.instance.stop();
+    _searchCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _loadAllRecordings({bool forceSync = false}) async {
+    if (!mounted) return;
+    setState(() => _isLoading = true);
+
+    // 1. Instant load from SQLite cache
+    final local = await DatabaseHelper.instance.getLocalRecordings(limit: 50);
+    if (mounted) {
+      setState(() {
+        _recordings = local;
+        _isLoading = false;
+      });
+    }
+
+    // Resolve local paths on disk
+    for (final rec in local) {
+      if (rec.localPath != null && rec.localPath!.isNotEmpty) {
+        _localRecordingPaths[rec.filename] = rec.localPath!;
+      } else {
+        RelayClient.instance.getLocalRecordingPath(rec.filename).then((p) {
+          if (p != null && mounted) {
+            setState(() => _localRecordingPaths[rec.filename] = p);
+          }
+        });
+      }
+    }
+
+    // 2. Fetch fresh list from Vivo S1 host if requested or if cache is empty
+    if (forceSync || local.isEmpty) {
+      if (mounted) setState(() => _isSyncing = true);
+      await RelayClient.instance.syncLatestRecordings();
+      final updated = await DatabaseHelper.instance.getLocalRecordings(limit: 50);
+      if (mounted) {
+        setState(() {
+          _recordings = updated;
+          _isSyncing = false;
+        });
+      }
+      for (final rec in updated) {
+        RelayClient.instance.getLocalRecordingPath(rec.filename).then((p) {
+          if (p != null && mounted) {
+            setState(() => _localRecordingPaths[rec.filename] = p);
+          }
+        });
+      }
+    }
+  }
+
+  Future<void> _togglePlayRecording(CallRecordingModel recording) async {
+    if (_downloadingFiles.contains(recording.filename)) return;
+
+    String? localPath = _localRecordingPaths[recording.filename];
+    if (localPath == null) {
+      setState(() => _downloadingFiles.add(recording.filename));
+      localPath = await RelayClient.instance.downloadRecordingAudio(recording.filename);
+      if (mounted) {
+        setState(() {
+          _downloadingFiles.remove(recording.filename);
+          if (localPath != null) {
+            _localRecordingPaths[recording.filename] = localPath;
+          }
+        });
+      }
+    }
+
+    if (localPath == null) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Could not download audio from Vivo host. Check hotspot/Wi-Fi connection.'),
+            backgroundColor: Color(0xFFFF3B30),
+            behavior: SnackBarBehavior.floating,
+          ),
+        );
+      }
+      return;
+    }
+
+    final state = NativeAudioService.instance.currentState;
+    if (state.activeUrl == localPath && state.isPlaying) {
+      await NativeAudioService.instance.pause();
+    } else if (state.activeUrl == localPath && !state.isPlaying) {
+      await NativeAudioService.instance.resume();
+    } else {
+      await NativeAudioService.instance.play(localPath);
+    }
+  }
+
+  Future<void> _shareRecording(CallRecordingModel recording) async {
+    String? localPath = _localRecordingPaths[recording.filename];
+    if (localPath == null) {
+      setState(() => _downloadingFiles.add(recording.filename));
+      localPath = await RelayClient.instance.downloadRecordingAudio(recording.filename);
+      if (mounted) {
+        setState(() {
+          _downloadingFiles.remove(recording.filename);
+          if (localPath != null) {
+            _localRecordingPaths[recording.filename] = localPath;
+          }
+        });
+      }
+    }
+
+    if (localPath != null) {
+      await NativeAudioService.instance.shareFile(localPath);
+    } else if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Could not prepare file for sharing.'),
+          backgroundColor: Color(0xFFFF3B30),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final filtered = _recordings.where((r) {
+      if (_searchQuery.isEmpty) return true;
+      final q = _searchQuery.toLowerCase();
+      final nameMatches = (r.callerName != null && r.callerName!.toLowerCase().contains(q));
+      final numMatches = r.remoteNumber.toLowerCase().contains(q);
+      final fileMatches = r.filename.toLowerCase().contains(q);
+      return nameMatches || numMatches || fileMatches;
+    }).toList();
+
+    return Container(
+      constraints: BoxConstraints(
+        maxHeight: MediaQuery.of(context).size.height * 0.88,
+      ),
+      padding: const EdgeInsets.only(left: 18, right: 18, top: 12, bottom: 36),
+      decoration: const BoxDecoration(
+        color: Color(0xF21C1C24),
+        borderRadius: BorderRadius.vertical(top: Radius.circular(24)),
+      ),
+      child: Column(
+        mainAxisSize: MainAxisSize.min,
+        children: [
+          // Drag handle
+          Container(
+            width: 36,
+            height: 4,
+            decoration: BoxDecoration(
+              color: Colors.white24,
+              borderRadius: BorderRadius.circular(2),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Header with count and sync button
+          Row(
+            children: [
+              Container(
+                padding: const EdgeInsets.all(8),
+                decoration: BoxDecoration(
+                  color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.18),
+                  borderRadius: BorderRadius.circular(12),
+                ),
+                child: const Icon(Icons.mic_rounded, color: LiquidGlassTheme.iosBlue, size: 20),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    const Text(
+                      'All Call Recordings',
+                      style: TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.bold,
+                        letterSpacing: -0.3,
+                      ),
+                    ),
+                    const SizedBox(height: 1),
+                    Text(
+                      '${_recordings.length} synced from Vivo S1 host',
+                      style: const TextStyle(color: Colors.white54, fontSize: 12),
+                    ),
+                  ],
+                ),
+              ),
+              // Sync from Vivo Host Button
+              IconButton(
+                onPressed: _isSyncing ? null : () => _loadAllRecordings(forceSync: true),
+                icon: _isSyncing
+                    ? const SizedBox(
+                        width: 18,
+                        height: 18,
+                        child: CircularProgressIndicator(strokeWidth: 2, color: LiquidGlassTheme.iosBlue),
+                      )
+                    : const Icon(Icons.sync_rounded, color: LiquidGlassTheme.iosBlue, size: 22),
+                tooltip: 'Sync latest recordings from Vivo',
+              ),
+            ],
+          ),
+          const SizedBox(height: 12),
+
+          // Search Field
+          Container(
+            decoration: BoxDecoration(
+              color: Colors.white.withValues(alpha: 0.08),
+              borderRadius: BorderRadius.circular(12),
+            ),
+            child: TextField(
+              controller: _searchCtrl,
+              style: const TextStyle(color: Colors.white, fontSize: 14),
+              onChanged: (val) => setState(() => _searchQuery = val.trim()),
+              decoration: InputDecoration(
+                prefixIcon: const Icon(Icons.search_rounded, color: Colors.white38, size: 20),
+                suffixIcon: _searchQuery.isNotEmpty
+                    ? IconButton(
+                        icon: const Icon(Icons.clear_rounded, color: Colors.white38, size: 18),
+                        onPressed: () {
+                          _searchCtrl.clear();
+                          setState(() => _searchQuery = '');
+                        },
+                      )
+                    : null,
+                hintText: 'Search by caller or number...',
+                hintStyle: const TextStyle(color: Colors.white38, fontSize: 13),
+                border: InputBorder.none,
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 11),
+              ),
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // Recordings List
+          Expanded(
+            child: _isLoading
+                ? const Center(child: CircularProgressIndicator(color: LiquidGlassTheme.iosBlue))
+                : filtered.isEmpty
+                    ? Center(
+                        child: Column(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(
+                              _searchQuery.isNotEmpty ? Icons.search_off_rounded : Icons.mic_off_rounded,
+                              size: 44,
+                              color: Colors.white24,
+                            ),
+                            const SizedBox(height: 8),
+                            Text(
+                              _searchQuery.isNotEmpty
+                                  ? 'No recordings matching "$_searchQuery"'
+                                  : 'No call recordings found yet',
+                              style: const TextStyle(color: Colors.white54, fontSize: 14),
+                            ),
+                            if (_searchQuery.isEmpty) ...[
+                              const SizedBox(height: 12),
+                              ElevatedButton.icon(
+                                style: ElevatedButton.styleFrom(
+                                  backgroundColor: LiquidGlassTheme.iosBlue,
+                                  foregroundColor: Colors.white,
+                                  shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                                ),
+                                icon: const Icon(Icons.sync_rounded, size: 16),
+                                label: const Text('Sync from Vivo Host'),
+                                onPressed: () => _loadAllRecordings(forceSync: true),
+                              ),
+                            ],
+                          ],
+                        ),
+                      )
+                    : StreamBuilder<AudioPlaybackState>(
+                        stream: NativeAudioService.instance.stateStream,
+                        initialData: NativeAudioService.instance.currentState,
+                        builder: (context, audioSnapshot) {
+                          final audioState = audioSnapshot.data ?? const AudioPlaybackState();
+
+                          return ListView.builder(
+                            itemCount: filtered.length,
+                            itemBuilder: (context, index) {
+                              final rec = filtered[index];
+                              final recUrl = RelayClient.instance.getRecordingAudioUrl(rec.filename);
+                              final localPath = _localRecordingPaths[rec.filename];
+                              final isDownloaded = localPath != null;
+                              final isDownloading = _downloadingFiles.contains(rec.filename);
+                              final isThisPlaying = (audioState.activeUrl == localPath || audioState.activeUrl == recUrl) && audioState.isPlaying;
+                              final isThisActive = (audioState.activeUrl == localPath || audioState.activeUrl == recUrl);
+
+                              final title = (rec.callerName != null && rec.callerName!.isNotEmpty)
+                                  ? rec.callerName!
+                                  : (rec.remoteNumber.isNotEmpty ? PhoneNumberNormalizer.formatForDisplay(rec.remoteNumber) : 'Unknown Caller');
+                              final subtitle = rec.remoteNumber.isNotEmpty && title != rec.remoteNumber
+                                  ? '${PhoneNumberNormalizer.formatForDisplay(rec.remoteNumber)} • ${rec.dateFormatted}'
+                                  : rec.dateFormatted;
+
+                              return Container(
+                                margin: const EdgeInsets.only(bottom: 8),
+                                padding: const EdgeInsets.all(12),
+                                decoration: BoxDecoration(
+                                  color: isThisActive
+                                      ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.14)
+                                      : Colors.white.withValues(alpha: 0.06),
+                                  borderRadius: BorderRadius.circular(14),
+                                  border: Border.all(
+                                    color: isThisActive
+                                        ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.4)
+                                        : (isDownloaded ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.25) : Colors.white.withValues(alpha: 0.1)),
+                                    width: 0.75,
+                                  ),
+                                ),
+                                child: Column(
+                                  mainAxisSize: MainAxisSize.min,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        // Play / Pause / Download Button
+                                        InkWell(
+                                          borderRadius: BorderRadius.circular(20),
+                                          onTap: () => _togglePlayRecording(rec),
+                                          child: Container(
+                                            width: 40,
+                                            height: 40,
+                                            decoration: BoxDecoration(
+                                              shape: BoxShape.circle,
+                                              color: isThisPlaying
+                                                  ? LiquidGlassTheme.iosBlue
+                                                  : Colors.white.withValues(alpha: 0.14),
+                                            ),
+                                            child: isDownloading
+                                                ? const Padding(
+                                                    padding: EdgeInsets.all(10),
+                                                    child: CircularProgressIndicator(
+                                                      strokeWidth: 2,
+                                                      color: Colors.white,
+                                                    ),
+                                                  )
+                                                : Icon(
+                                                    isThisPlaying ? Icons.pause_rounded : Icons.play_arrow_rounded,
+                                                    color: Colors.white,
+                                                    size: 24,
+                                                  ),
+                                          ),
+                                        ),
+                                        const SizedBox(width: 12),
+                                        // Title & Info
+                                        Expanded(
+                                          child: Column(
+                                            crossAxisAlignment: CrossAxisAlignment.start,
+                                            children: [
+                                              Row(
+                                                children: [
+                                                  Expanded(
+                                                    child: Text(
+                                                      title,
+                                                      style: const TextStyle(
+                                                        color: Colors.white,
+                                                        fontSize: 14,
+                                                        fontWeight: FontWeight.bold,
+                                                      ),
+                                                      maxLines: 1,
+                                                      overflow: TextOverflow.ellipsis,
+                                                    ),
+                                                  ),
+                                                  const SizedBox(width: 6),
+                                                  Container(
+                                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                                    decoration: BoxDecoration(
+                                                      color: isDownloaded
+                                                          ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.2)
+                                                          : Colors.white.withValues(alpha: 0.08),
+                                                      borderRadius: BorderRadius.circular(6),
+                                                      border: Border.all(
+                                                        color: isDownloaded
+                                                            ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4)
+                                                            : Colors.white12,
+                                                        width: 0.5,
+                                                      ),
+                                                    ),
+                                                    child: Row(
+                                                      mainAxisSize: MainAxisSize.min,
+                                                      children: [
+                                                        Icon(
+                                                          isDownloaded ? Icons.check_circle_rounded : Icons.cloud_download_outlined,
+                                                          size: 10,
+                                                          color: isDownloaded ? LiquidGlassTheme.gsmGreen : Colors.white70,
+                                                        ),
+                                                        const SizedBox(width: 3),
+                                                        Text(
+                                                          isDownloaded ? 'iPhone File' : 'Vivo Host',
+                                                          style: TextStyle(
+                                                            fontSize: 9.5,
+                                                            fontWeight: FontWeight.w600,
+                                                            color: isDownloaded ? LiquidGlassTheme.gsmGreen : Colors.white70,
+                                                          ),
+                                                        ),
+                                                      ],
+                                                    ),
+                                                  ),
+                                                ],
+                                              ),
+                                              const SizedBox(height: 2),
+                                              Text(
+                                                '$subtitle • ${rec.sizeFormatted}',
+                                                style: TextStyle(
+                                                  color: Colors.white.withValues(alpha: 0.6),
+                                                  fontSize: 11,
+                                                ),
+                                                maxLines: 1,
+                                                overflow: TextOverflow.ellipsis,
+                                              ),
+                                            ],
+                                          ),
+                                        ),
+                                        // Dial Contact
+                                        if (rec.remoteNumber.isNotEmpty)
+                                          IconButton(
+                                            icon: const Icon(
+                                              Icons.phone_rounded,
+                                              color: LiquidGlassTheme.gsmGreen,
+                                              size: 18,
+                                            ),
+                                            onPressed: () {
+                                              HapticFeedback.lightImpact();
+                                              Navigator.pop(context);
+                                              RelayClient.instance.dialNumber(rec.remoteNumber);
+                                            },
+                                            tooltip: 'Dial Number',
+                                          ),
+                                        // Native iOS Share Button
+                                        IconButton(
+                                          icon: Icon(
+                                            Icons.share_rounded,
+                                            color: isDownloaded ? LiquidGlassTheme.iosBlue : Colors.white70,
+                                            size: 18,
+                                          ),
+                                          onPressed: () => _shareRecording(rec),
+                                          tooltip: 'Share Native Audio File',
+                                        ),
+                                      ],
+                                    ),
+                                    if (isThisActive && audioState.duration > 0) ...[
+                                      const SizedBox(height: 8),
+                                      SliderTheme(
+                                        data: SliderTheme.of(context).copyWith(
+                                          trackHeight: 3,
+                                          thumbShape: const RoundSliderThumbShape(enabledThumbRadius: 6),
+                                          overlayShape: const RoundSliderOverlayShape(overlayRadius: 10),
+                                          activeTrackColor: LiquidGlassTheme.iosBlue,
+                                          inactiveTrackColor: Colors.white24,
+                                          thumbColor: Colors.white,
+                                        ),
+                                        child: Slider(
+                                          value: audioState.progress,
+                                          onChanged: (val) {
+                                            final targetSec = val * audioState.duration;
+                                            NativeAudioService.instance.seek(targetSec);
+                                          },
+                                        ),
+                                      ),
+                                      Padding(
+                                        padding: const EdgeInsets.symmetric(horizontal: 6),
+                                        child: Row(
+                                          mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                                          children: [
+                                            Text(audioState.positionFormatted, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                                            Text(audioState.durationFormatted, style: const TextStyle(color: Colors.white54, fontSize: 10)),
+                                          ],
+                                        ),
+                                      ),
+                                    ],
+                                  ],
+                                ),
+                              );
+                            },
+                          );
+                        },
+                      ),
+          ),
+        ],
       ),
     );
   }
