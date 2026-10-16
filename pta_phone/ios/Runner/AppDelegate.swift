@@ -4,6 +4,7 @@ import Intents
 import AVFoundation
 import MediaPlayer
 import Network
+import UserNotifications
 
 @main
 @objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
@@ -25,12 +26,32 @@ import Network
     startSilentAudioKeepAlive()
     setupAudioInterruptionObserver()
     startUdpListener()
+    setupNotificationCenter()
 
     DispatchQueue.main.async { [weak self] in
       _ = self?.getNativeChannel()
     }
 
     return super.application(application, didFinishLaunchingWithOptions: launchOptions)
+  }
+
+  private func setupNotificationCenter() {
+    UNUserNotificationCenter.current().delegate = self
+    UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
+      print("[AppDelegate] Notification authorization granted: \(granted)")
+    }
+    let callBackAction = UNNotificationAction(
+      identifier: "CALL_BACK_ACTION",
+      title: "Call Back",
+      options: [.foreground]
+    )
+    let missedCategory = UNNotificationCategory(
+      identifier: "MISSED_CALL",
+      actions: [callBackAction],
+      intentIdentifiers: [],
+      options: []
+    )
+    UNUserNotificationCenter.current().setNotificationCategories([missedCategory])
   }
 
   // MARK: - Scene & Application Lifecycle Handlers (Permanent Keep-Alive)
@@ -303,6 +324,15 @@ import Network
           let pending = self?.pendingDialNumber
           self?.pendingDialNumber = nil
           result(pending)
+        } else if call.method == "showMissedCallNotification" {
+          if let args = call.arguments as? [String: Any],
+             let number = args["number"] as? String {
+            let name = args["name"] as? String ?? number
+            self?.showMissedCallNotification(number: number, name: name)
+            result(true)
+          } else {
+            result(false)
+          }
         } else {
           result(FlutterMethodNotImplemented)
         }
@@ -442,14 +472,93 @@ import Network
     audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false, "completed": true])
   }
 
-  private var pendingDialNumber: String?
+  var pendingDialNumber: String?
 
-  private func sendDialIntent(_ number: String) {
+  func sendDialIntent(_ number: String) {
+    let clean = number.trimmingCharacters(in: .whitespacesAndNewlines)
+    guard !clean.isEmpty else { return }
+    print("[NativeBridge] 📞 sendDialIntent received number: \(clean)")
+    pendingDialNumber = clean
+
     if let channel = getNativeChannel() {
-      channel.invokeMethod("onNativeDialIntent", arguments: ["number": number])
-    } else {
-      pendingDialNumber = number
+      channel.invokeMethod("onNativeDialIntent", arguments: ["number": clean])
+      DispatchQueue.main.asyncAfter(deadline: .now() + 0.5) {
+        channel.invokeMethod("onNativeDialIntent", arguments: ["number": clean])
+      }
     }
+  }
+
+  func handleUserActivity(_ userActivity: NSUserActivity) {
+    print("[NativeBridge] 📱 handleUserActivity: \(userActivity.activityType)")
+    if let intent = userActivity.interaction?.intent as? INStartCallIntent {
+      if let person = intent.contacts?.first, let handle = person.personHandle?.value, !handle.isEmpty {
+        sendDialIntent(handle)
+        return
+      }
+      if let callRecord = intent.callRecordToStart, let handle = callRecord.caller?.personHandle?.value, !handle.isEmpty {
+        sendDialIntent(handle)
+        return
+      }
+    } else if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent {
+      if let person = intent.contacts?.first, let handle = person.personHandle?.value, !handle.isEmpty {
+        sendDialIntent(handle)
+        return
+      }
+    }
+
+    if let phone = userActivity.userInfo?["phoneNumber"] as? String, !phone.isEmpty {
+      sendDialIntent(phone)
+      return
+    }
+  }
+
+  func showMissedCallNotification(number: String, name: String) {
+    let content = UNMutableNotificationContent()
+    content.title = "Missed Call"
+    let displayTitle = (name.isEmpty || name == number) ? number : "\(name) (\(number))"
+    content.body = "Missed call from \(displayTitle). Tap to call back."
+    content.sound = UNNotificationSound.default
+    content.userInfo = ["number": number, "name": name]
+    content.categoryIdentifier = "MISSED_CALL"
+
+    let request = UNNotificationRequest(
+      identifier: "missed_call_\(Date().timeIntervalSince1970)",
+      content: content,
+      trigger: nil
+    )
+    UNUserNotificationCenter.current().add(request) { error in
+      if let error = error {
+        print("[AppDelegate] Error posting missed call notification: \(error)")
+      } else {
+        print("[AppDelegate] Successfully posted missed call notification for \(number)")
+      }
+    }
+  }
+
+  // MARK: - UNUserNotificationCenterDelegate Handlers
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    willPresent notification: UNNotification,
+    withCompletionHandler completionHandler: @escaping (UNNotificationPresentationOptions) -> Void
+  ) {
+    if #available(iOS 14.0, *) {
+      completionHandler([.banner, .sound, .list, .badge])
+    } else {
+      completionHandler([.alert, .sound, .badge])
+    }
+  }
+
+  override func userNotificationCenter(
+    _ center: UNUserNotificationCenter,
+    didReceive response: UNNotificationResponse,
+    withCompletionHandler completionHandler: @escaping () -> Void
+  ) {
+    let userInfo = response.notification.request.content.userInfo
+    if let number = userInfo["number"] as? String, !number.isEmpty {
+      print("[NativeBridge] 📞 Missed call notification tapped -> dialing: \(number)")
+      sendDialIntent(number)
+    }
+    completionHandler()
   }
 
   override func application(
@@ -457,15 +566,7 @@ import Network
     continue userActivity: NSUserActivity,
     restorationHandler: @escaping ([UIUserActivityRestoring]?) -> Void
   ) -> Bool {
-    if let intent = userActivity.interaction?.intent as? INStartCallIntent,
-       let person = intent.contacts?.first,
-       let handle = person.personHandle?.value {
-      sendDialIntent(handle)
-    } else if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent,
-              let person = intent.contacts?.first,
-              let handle = person.personHandle?.value {
-      sendDialIntent(handle)
-    }
+    handleUserActivity(userActivity)
     return super.application(application, continue: userActivity, restorationHandler: restorationHandler)
   }
 

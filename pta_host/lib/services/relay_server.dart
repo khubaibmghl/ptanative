@@ -494,7 +494,19 @@ class RelayServer {
     return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
   }
 
-  // 8. Call Recordings Listing
+  // 8. Latest Call Recordings (Permanent 10 sync)
+  if (path == 'api/recordings/latest') {
+    final limitStr = request.url.queryParameters['limit'] ?? '10';
+    final limit = int.tryParse(limitStr) ?? 10;
+    final recordings = await VivoRecordingService.instance.getLatestRecordings(limit: limit);
+    final list = recordings.map((r) => r.toJson()).toList();
+    return Response.ok(jsonEncode(list), headers: {
+      'content-type': 'application/json',
+      'access-control-allow-origin': '*',
+    });
+  }
+
+  // 8b. Call Recordings Listing by Number
   if (path == 'api/recordings') {
     final number = request.url.queryParameters['number'] ?? '';
     List<String> contactNames = [];

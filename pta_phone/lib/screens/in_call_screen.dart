@@ -53,7 +53,7 @@ class _InCallScreenState extends State<InCallScreen> {
     super.didUpdateWidget(oldWidget);
     if (widget.callInfo.state != oldWidget.callInfo.state) {
       _startTimerIfNeeded();
-    } else if (widget.callInfo.durationSeconds > 0 && widget.callInfo.durationSeconds != _elapsedSeconds) {
+    } else if (widget.callInfo.durationSeconds > 0 && (widget.callInfo.durationSeconds - _elapsedSeconds).abs() > 3) {
       setState(() {
         _elapsedSeconds = widget.callInfo.durationSeconds;
       });
@@ -63,12 +63,12 @@ class _InCallScreenState extends State<InCallScreen> {
   void _startTimerIfNeeded() {
     _timer?.cancel();
     if (widget.callInfo.state == PhoneCallState.connected) {
-      if (widget.callInfo.durationSeconds > 0) {
-        _elapsedSeconds = widget.callInfo.durationSeconds;
-      } else if (widget.callInfo.startTime > 0) {
+      if (widget.callInfo.startTime > 0) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final computed = (now - widget.callInfo.startTime) ~/ 1000;
-        _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : 0;
+        _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : widget.callInfo.durationSeconds;
+      } else if (widget.callInfo.durationSeconds > 0) {
+        _elapsedSeconds = widget.callInfo.durationSeconds;
       } else {
         _elapsedSeconds = 0;
       }
@@ -76,7 +76,13 @@ class _InCallScreenState extends State<InCallScreen> {
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {
           setState(() {
-            _elapsedSeconds++;
+            if (widget.callInfo.startTime > 0) {
+              final now = DateTime.now().millisecondsSinceEpoch;
+              final computed = (now - widget.callInfo.startTime) ~/ 1000;
+              _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : _elapsedSeconds + 1;
+            } else {
+              _elapsedSeconds++;
+            }
           });
         }
       });

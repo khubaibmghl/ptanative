@@ -3,17 +3,21 @@ class CallRecordingModel {
   final String filename;
   final String filePath;
   final String remoteNumber;
+  final String? callerName;
   final int timestamp;
   final int sizeBytes;
   final int durationSeconds;
+  final String? localPath;
 
   CallRecordingModel({
     required this.filename,
     required this.filePath,
     required this.remoteNumber,
+    this.callerName,
     required this.timestamp,
     required this.sizeBytes,
     this.durationSeconds = 0,
+    this.localPath,
   });
 
   String get sizeFormatted {
@@ -41,11 +45,13 @@ class CallRecordingModel {
   factory CallRecordingModel.fromJson(Map<String, dynamic> json) {
     return CallRecordingModel(
       filename: json['filename'] as String? ?? '',
-      filePath: json['filePath'] as String? ?? '',
-      remoteNumber: json['remoteNumber'] as String? ?? '',
+      filePath: json['filePath'] as String? ?? json['file_path'] as String? ?? '',
+      remoteNumber: json['remoteNumber'] as String? ?? json['remote_number'] as String? ?? '',
+      callerName: json['callerName'] as String? ?? json['caller_name'] as String?,
       timestamp: json['timestamp'] as int? ?? DateTime.now().millisecondsSinceEpoch,
-      sizeBytes: json['sizeBytes'] as int? ?? 0,
-      durationSeconds: json['durationSeconds'] as int? ?? 0,
+      sizeBytes: json['sizeBytes'] as int? ?? json['size_bytes'] as int? ?? 0,
+      durationSeconds: json['durationSeconds'] as int? ?? json['duration_seconds'] as int? ?? 0,
+      localPath: json['localPath'] as String? ?? json['local_path'] as String?,
     );
   }
 
@@ -53,10 +59,18 @@ class CallRecordingModel {
     return {
       'filename': filename,
       'filePath': filePath,
+      'file_path': filePath,
       'remoteNumber': remoteNumber,
+      'remote_number': remoteNumber,
+      'callerName': callerName,
+      'caller_name': callerName,
       'timestamp': timestamp,
       'sizeBytes': sizeBytes,
+      'size_bytes': sizeBytes,
       'durationSeconds': durationSeconds,
+      'duration_seconds': durationSeconds,
+      'localPath': localPath,
+      'local_path': localPath,
     };
   }
 }

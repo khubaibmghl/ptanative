@@ -152,15 +152,20 @@ class RelayClient {
     cloudRelayUrl = prefs.getString('cloud_url') ?? '';
     pairingKey = prefs.getString('pairing_key') ?? 'pta_native_default';
 
-    // Instant gateway probe / discovery on startup
-    final discoveredIp = await discoverHostIp();
-    if (discoveredIp != null && discoveredIp.isNotEmpty) {
-      hostIp = discoveredIp;
-      await prefs.setString('host_ip', hostIp);
-    }
-
+    // Connect immediately to last known host IP (fast launch, 0ms blocking)
     connect();
     _startReconnectLoop();
+
+    // Run discovery in the background so cold startup does not hang UI on splash screen
+    discoverHostIp().then((discoveredIp) async {
+      if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
+        logDiagnostic('⚡ Background discovery resolved host: $discoveredIp');
+        hostIp = discoveredIp;
+        await prefs.setString('host_ip', hostIp);
+        disconnect();
+        connect();
+      }
+    });
   }
 
   int lastPingLatencyMs = 0;
@@ -689,25 +694,33 @@ class RelayClient {
           final startTimeRaw = msg.data['startTime'] as int? ?? 0;
           final startTimeMs = (isAnswered && startTimeRaw > 0)
               ? (startTimeRaw < 100000000000 ? startTimeRaw * 1000 : startTimeRaw)
-              : 0;
+              : DateTime.now().millisecondsSinceEpoch;
 
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
+          final bool wasIncomingCall = currentActiveCall?.isIncoming ?? false;
+
           currentActiveCall = ActiveCallInfo(
             number: number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call'),
             callerName: contact?.displayName ?? (currentActiveCall?.callerName ?? ''),
             label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
             startTime: startTimeMs,
             durationSeconds: 0,
-            isIncoming: currentActiveCall?.isIncoming ?? false,
-            state: isAnswered && startTimeMs > 0 ? PhoneCallState.connected : PhoneCallState.dialing,
+            isIncoming: wasIncomingCall,
+            state: PhoneCallState.connected,
           );
           _activeCallController.add(currentActiveCall);
 
           if (isAnswered) {
-            await CallKitService.instance.setCallConnected();
+            // If incoming call was answered on Android, dismiss CallKit ringing UI immediately
+            // so iPhone stops ringing and doesn't fire 35s actionCallTimeout hangup!
+            if (wasIncomingCall) {
+              await CallKitService.instance.endAllCalls();
+            } else {
+              await CallKitService.instance.setCallConnected();
+            }
             logDiagnostic('🎙️ Active cellular call established -> Starting lossless WebRTC Voice Tunnel');
             voiceTunnel.startVoiceTunnel(
-              isCaller: true,
+              isCaller: !wasIncomingCall,
               sendSignaling: (sMsg) => _sendRawMessage(sMsg),
               logCallback: (txt) => logDiagnostic('[WEBRTC] $txt'),
             );
@@ -743,7 +756,8 @@ class RelayClient {
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           final bool wasRinging = currentActiveCall?.state == PhoneCallState.ringing;
           final bool wasIncoming = currentActiveCall?.isIncoming ?? false;
-          final bool isMissed = msgIsMissed || (wasRinging && wasIncoming) || (duration == 0 && wasIncoming);
+          final bool wasConnected = currentActiveCall?.state == PhoneCallState.connected;
+          final bool isMissed = msgIsMissed || (wasRinging && wasIncoming && !wasConnected && duration == 0);
 
           final log = CallLogModel(
             id: DateTime.now().millisecondsSinceEpoch,
@@ -809,16 +823,27 @@ class RelayClient {
 
   // --- Real-time Commands (WebSocket Priority with REST Fallback) ---
 
+  String? _lastDialedNumber;
+  int _lastDialedTimestamp = 0;
+
   Future<bool> dialNumber(String number) async {
     final clean = number.trim();
     if (clean.isEmpty) return false;
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (_lastDialedNumber == clean && (now - _lastDialedTimestamp) < 1500) {
+      logDiagnostic('⚡ Debounced duplicate dial intent for $clean');
+      return true;
+    }
+    _lastDialedNumber = clean;
+    _lastDialedTimestamp = now;
 
     final contact = await DatabaseHelper.instance.findContactByNumber(clean);
     currentActiveCall = ActiveCallInfo(
       number: clean,
       callerName: contact?.displayName ?? '',
       label: contact?.getLabelForNumber(clean),
-      startTime: 0,
+      startTime: now,
       isIncoming: false,
       state: PhoneCallState.dialing,
     );
@@ -970,6 +995,7 @@ class RelayClient {
   Future<void> syncAll() async {
     await fetchContacts();
     await fetchHistory();
+    await syncLatestRecordings();
   }
 
   Future<void> fetchContacts() async {
@@ -1000,19 +1026,69 @@ class RelayClient {
     } catch (_) {}
   }
 
-  /// Fetches the list of Vivo S1 native call recordings matching a phone number
-  Future<List<CallRecordingModel>> fetchRecordings(String rawNumber) async {
+  bool _isSyncingRecordings = false;
+
+  /// Permanently fetches and caches the latest 10 recordings from the Vivo S1 host
+  Future<void> syncLatestRecordings() async {
+    if (_isSyncingRecordings || !_isConnected) return;
+    _isSyncingRecordings = true;
     try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings?number=${Uri.encodeComponent(rawNumber)}');
-      final res = await http.get(uri).timeout(const Duration(seconds: 4));
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings/latest?limit=10');
+      final res = await http.get(uri).timeout(const Duration(seconds: 5));
       if (res.statusCode == 200) {
         final List<dynamic> list = jsonDecode(res.body);
-        return list.map((item) => CallRecordingModel.fromJson(Map<String, dynamic>.from(item))).toList();
+        final recordings = list.map((item) => CallRecordingModel.fromJson(Map<String, dynamic>.from(item))).toList();
+        logDiagnostic('📥 Synced ${recordings.length} latest recordings from Vivo S1 host');
+        await DatabaseHelper.instance.saveRecordings(recordings);
+
+        // Pre-download audio files in background so they are permanently available offline on iPhone
+        for (final rec in recordings) {
+          final local = await getLocalRecordingPath(rec.filename);
+          if (local == null) {
+            downloadRecordingAudio(rec.filename).then((savedPath) {
+              if (savedPath != null) {
+                DatabaseHelper.instance.updateRecordingLocalPath(rec.filename, savedPath);
+              }
+            });
+          }
+        }
       }
     } catch (e) {
-      debugPrint('[RELAY_CLIENT] Error fetching recordings: $e');
+      debugPrint('[RELAY_CLIENT] Error syncing latest recordings: $e');
+    } finally {
+      _isSyncingRecordings = false;
     }
-    return [];
+  }
+
+  /// Fetches the list of recordings: checks SQLite offline cache first, then syncs with host
+  Future<List<CallRecordingModel>> fetchRecordings(String rawNumber) async {
+    // 1. Instant check from local SQLite cache
+    final localCached = await DatabaseHelper.instance.getLocalRecordings(number: rawNumber);
+
+    // 2. If online, fetch from host and update cache
+    if (_isConnected) {
+      try {
+        final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings?number=${Uri.encodeComponent(rawNumber)}');
+        final res = await http.get(uri).timeout(const Duration(seconds: 4));
+        if (res.statusCode == 200) {
+          final List<dynamic> list = jsonDecode(res.body);
+          final recordings = list.map((item) => CallRecordingModel.fromJson(Map<String, dynamic>.from(item))).toList();
+          if (recordings.isNotEmpty) {
+            await DatabaseHelper.instance.saveRecordings(recordings);
+            return recordings;
+          }
+        }
+      } catch (e) {
+        debugPrint('[RELAY_CLIENT] Error fetching recordings: $e');
+      }
+    }
+
+    if (localCached.isNotEmpty) {
+      return localCached;
+    }
+
+    // Fallback: return any recent recordings cached locally
+    return await DatabaseHelper.instance.getLocalRecordings(limit: 10);
   }
 
   /// URL for streaming or downloading a specific recording file from the Vivo S1 host

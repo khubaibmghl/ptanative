@@ -16,6 +16,7 @@ import 'screens/settings_screen.dart';
 import 'screens/in_call_screen.dart';
 import 'screens/messages_screen.dart';
 import 'dart:async';
+import 'package:shared_preferences/shared_preferences.dart';
 
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
@@ -87,10 +88,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   }
 
   Future<void> _checkStartupPermissions() async {
+    final prefs = await SharedPreferences.getInstance();
+    final hasCompleted = prefs.getBool('has_completed_permission_setup') ?? false;
+    if (hasCompleted) return;
+
     final allGranted = await PhonePermissionService.arePermissionsGranted();
     if (!allGranted && mounted) {
       await PhonePermissionSheet.show(context);
     }
+    await prefs.setBool('has_completed_permission_setup', true);
   }
 
   void _setupSmsListener() {
@@ -140,6 +146,16 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     _missedCallSub = RelayClient.instance.missedCallStream.listen((log) {
       if (mounted) {
         HapticFeedback.heavyImpact();
+
+        // 1. Post authentic native iOS Notification Center banner with 1-tap call back
+        try {
+          const channel = MethodChannel('com.pta.phone/native_intents');
+          channel.invokeMethod('showMissedCallNotification', {
+            'number': log.remoteNumber,
+            'name': log.callerName,
+          });
+        } catch (_) {}
+
         ScaffoldMessenger.of(context).showSnackBar(
           SnackBar(
             behavior: SnackBarBehavior.floating,
@@ -320,8 +336,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           break;
         case Event.actionCallDecline:
         case Event.actionCallEnded:
-        case Event.actionCallTimeout:
           RelayClient.instance.hangupCall();
+          break;
+        case Event.actionCallTimeout:
+          // Protect active connected call from false timeout hangup
+          if (RelayClient.instance.currentActiveCall?.state != PhoneCallState.connected) {
+            RelayClient.instance.hangupCall();
+          }
           break;
         default:
           break;

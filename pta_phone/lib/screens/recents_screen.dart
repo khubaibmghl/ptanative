@@ -385,7 +385,34 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
     if (mounted && contact != null) {
       _contactId = contact.id;
     }
-    final list = await RelayClient.instance.fetchRecordings(widget.log.remoteNumber);
+
+    // 1. Instant load from local SQLite cache
+    final local = await DatabaseHelper.instance.getLocalRecordings(number: widget.log.remoteNumber);
+    if (mounted && local.isNotEmpty) {
+      setState(() {
+        _recordings = local;
+        _isLoadingRecordings = false;
+      });
+      for (final rec in local) {
+        if (rec.localPath != null && rec.localPath!.isNotEmpty) {
+          _localRecordingPaths[rec.filename] = rec.localPath!;
+        } else {
+          RelayClient.instance.getLocalRecordingPath(rec.filename).then((p) {
+            if (p != null && mounted) {
+              setState(() => _localRecordingPaths[rec.filename] = p);
+            }
+          });
+        }
+      }
+    }
+
+    // 2. Query host/update cache
+    var list = await RelayClient.instance.fetchRecordings(widget.log.remoteNumber);
+    if (list.isEmpty) {
+      // Fallback to latest 10 synced recordings across all calls
+      list = await DatabaseHelper.instance.getLocalRecordings(limit: 10);
+    }
+
     if (mounted) {
       setState(() {
         _recordings = list;
@@ -395,10 +422,10 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
 
     // Check which recordings already exist locally on iPhone
     for (final rec in list) {
-      final local = await RelayClient.instance.getLocalRecordingPath(rec.filename);
-      if (local != null && mounted) {
+      final localPath = await RelayClient.instance.getLocalRecordingPath(rec.filename);
+      if (localPath != null && mounted) {
         setState(() {
-          _localRecordingPaths[rec.filename] = local;
+          _localRecordingPaths[rec.filename] = localPath;
         });
       }
     }

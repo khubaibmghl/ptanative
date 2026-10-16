@@ -12,8 +12,13 @@ class VivoRecordingService {
     '/storage/emulated/0/Recordings/Call',
     '/storage/emulated/0/Record',
     '/storage/emulated/0/Recordings',
+    '/storage/emulated/0/Recorder/Call',
+    '/storage/emulated/0/Recorder',
+    '/storage/emulated/0/Sounds/Call',
+    '/storage/emulated/0/Sounds',
     '/sdcard/Record/Call',
     '/sdcard/Recordings/Call',
+    '/sdcard/Recorder/Call',
     '/storage/emulated/0/Music/Record/Call',
   ];
 
@@ -111,6 +116,50 @@ class VivoRecordingService {
     // Sort by newest recording first
     results.sort((a, b) => b.timestamp.compareTo(a.timestamp));
     debugPrint('[VIVO_RECORDINGS] Found ${results.length} recordings for $rawNumber');
+    return results;
+  }
+
+  /// Retrieves the latest call recordings across all directories regardless of number filter
+  Future<List<CallRecordingModel>> getLatestRecordings({int limit = 10}) async {
+    final List<CallRecordingModel> results = [];
+    final existingDirs = getExistingDirectories();
+    final Set<String> seenFilenames = {};
+    debugPrint('[VIVO_RECORDINGS] Fetching latest recordings (limit: $limit) from ${existingDirs.length} directories');
+
+    for (final dir in existingDirs) {
+      try {
+        final entities = dir.listSync();
+        for (final entity in entities) {
+          if (entity is! File) continue;
+          final filename = entity.path.split(Platform.pathSeparator).last;
+          if (seenFilenames.contains(filename)) continue;
+
+          final lowerExt = filename.toLowerCase();
+          final hasValidExt = validExtensions.any((ext) => lowerExt.endsWith(ext));
+          if (!hasValidExt) continue;
+
+          try {
+            final stat = entity.statSync();
+            seenFilenames.add(filename);
+            results.add(CallRecordingModel(
+              filename: filename,
+              filePath: entity.path,
+              remoteNumber: '',
+              timestamp: stat.modified.millisecondsSinceEpoch,
+              sizeBytes: stat.size,
+              durationSeconds: 0,
+            ));
+          } catch (_) {}
+        }
+      } catch (e) {
+        debugPrint('[VIVO_RECORDINGS] Error scanning dir ${dir.path}: $e');
+      }
+    }
+
+    results.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+    if (results.length > limit) {
+      return results.sublist(0, limit);
+    }
     return results;
   }
 

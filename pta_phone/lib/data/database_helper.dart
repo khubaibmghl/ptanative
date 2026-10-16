@@ -21,9 +21,30 @@ class DatabaseHelper {
 
     return await openDatabase(
       path,
-      version: 1,
+      version: 2,
       onCreate: _createDB,
+      onOpen: (db) async {
+        await _createRecordingsTable(db);
+      },
     );
+  }
+
+  static Future<void> _createRecordingsTable(DatabaseExecutor db) async {
+    await db.execute('''
+      CREATE TABLE IF NOT EXISTS call_recordings (
+        filename TEXT PRIMARY KEY,
+        file_path TEXT NOT NULL,
+        remote_number TEXT,
+        caller_name TEXT,
+        timestamp INTEGER NOT NULL,
+        size_bytes INTEGER NOT NULL,
+        duration_seconds INTEGER NOT NULL DEFAULT 0,
+        local_path TEXT
+      )
+    ''');
+    await db.execute('''
+      CREATE INDEX IF NOT EXISTS idx_recordings_timestamp ON call_recordings (timestamp DESC)
+    ''');
   }
 
   Future<void> _createDB(Database db, int version) async {
@@ -80,6 +101,9 @@ class DatabaseHelper {
         is_read INTEGER NOT NULL DEFAULT 0
       )
     ''');
+
+    // 5. Call Recordings Table
+    await _createRecordingsTable(db);
   }
 
   // --- Contacts CRUD & Sync ---
@@ -360,8 +384,68 @@ class DatabaseHelper {
     );
   }
 
+  // --- Call Recordings CRUD & Offline Cache ---
+
+  Future<void> saveRecordings(List<CallRecordingModel> list) async {
+    final db = await database;
+    await db.transaction((txn) async {
+      for (final rec in list) {
+        await txn.insert(
+          'call_recordings',
+          {
+            'filename': rec.filename,
+            'file_path': rec.filePath,
+            'remote_number': rec.remoteNumber,
+            'caller_name': rec.callerName,
+            'timestamp': rec.timestamp,
+            'size_bytes': rec.sizeBytes,
+            'duration_seconds': rec.durationSeconds,
+            'local_path': rec.localPath,
+          },
+          conflictAlgorithm: ConflictAlgorithm.replace,
+        );
+      }
+    });
+  }
+
+  Future<void> updateRecordingLocalPath(String filename, String localPath) async {
+    final db = await database;
+    await db.update(
+      'call_recordings',
+      {'local_path': localPath},
+      where: 'filename = ?',
+      whereArgs: [filename],
+    );
+  }
+
+  Future<List<CallRecordingModel>> getLocalRecordings({String? number, int limit = 10}) async {
+    final db = await database;
+    List<Map<String, dynamic>> maps;
+    if (number != null && number.trim().isNotEmpty) {
+      final clean = number.trim();
+      final norm = PhoneNumberNormalizer.normalize(clean);
+      final sig = norm.length >= 7 ? norm.substring(norm.length - 7) : norm;
+      maps = await db.query(
+        'call_recordings',
+        where: 'remote_number LIKE ? OR filename LIKE ?',
+        whereArgs: ['%$sig%', '%$sig%'],
+        orderBy: 'timestamp DESC',
+        limit: limit,
+      );
+    } else {
+      maps = await db.query(
+        'call_recordings',
+        orderBy: 'timestamp DESC',
+        limit: limit,
+      );
+    }
+
+    return maps.map((m) => CallRecordingModel.fromJson(m)).toList();
+  }
+
   Future<void> clearAll() async {
     final db = await database;
+    await db.delete('call_recordings');
     await db.delete('call_logs');
     await db.delete('messages');
     await db.delete('phone_numbers');

@@ -113,8 +113,13 @@ class HostPermissionService {
       debugPrint('[PERMISSION] Batch request error: $e');
     }
 
-    // 2. Storage / Audio permission for call recordings
+    // 2. Storage / Audio permission for call recordings (including Android 11+ All Files Access)
     try {
+      if (Platform.isAndroid) {
+        if (await Permission.manageExternalStorage.isDenied) {
+          await Permission.manageExternalStorage.request();
+        }
+      }
       final audioStatus = await Permission.audio.request();
       if (!audioStatus.isGranted && Platform.isAndroid) {
         await Permission.storage.request();
