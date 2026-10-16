@@ -31,7 +31,7 @@ class HotspotService {
 
   void _startMonitor() {
     _monitorTimer?.cancel();
-    _monitorTimer = Timer.periodic(const Duration(seconds: 8), (_) async {
+    _monitorTimer = Timer.periodic(const Duration(seconds: 15), (_) async {
       await checkStatus();
       if (autoTetherEnabled && !isHotspotActive) {
         debugPrint('[HOTSPOT] Auto-tether enabled: hotspot dropped. Prompting start...');

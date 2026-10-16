@@ -311,11 +311,28 @@ import UserNotifications
 
   // MARK: - Flutter Method Channels & Audio Player
 
+  func getRootViewController() -> UIViewController? {
+    if let root = window?.rootViewController {
+      return root
+    }
+    for scene in UIApplication.shared.connectedScenes {
+      if let windowScene = scene as? UIWindowScene {
+        if let keyWindow = windowScene.windows.first(where: { $0.isKeyWindow }) {
+          return keyWindow.rootViewController
+        }
+        if let firstWindow = windowScene.windows.first {
+          return firstWindow.rootViewController
+        }
+      }
+    }
+    return nil
+  }
+
   private func getNativeChannel() -> FlutterMethodChannel? {
     if let channel = nativeChannel {
       return channel
     }
-    let rootVc = window?.rootViewController ?? UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController
+    let rootVc = getRootViewController()
     if let controller = rootVc as? FlutterViewController {
       nativeChannel = FlutterMethodChannel(name: "com.pta.phone/native_intents", binaryMessenger: controller.binaryMessenger)
       setupAudioPlayerChannel(controller: controller)
@@ -382,7 +399,7 @@ import UserNotifications
         let fileUrl = URL(fileURLWithPath: filePath)
         let activityVC = UIActivityViewController(activityItems: [fileUrl], applicationActivities: nil)
         DispatchQueue.main.async {
-          if let rootVC = UIApplication.shared.windows.first(where: { $0.isKeyWindow })?.rootViewController ?? self.window?.rootViewController {
+          if let rootVC = self.getRootViewController() {
             if let popover = activityVC.popoverPresentationController {
               popover.sourceView = rootVC.view
               popover.sourceRect = CGRect(x: rootVC.view.bounds.midX, y: rootVC.view.bounds.midY, width: 0, height: 0)
@@ -490,17 +507,17 @@ import UserNotifications
 
   func handleUserActivity(_ userActivity: NSUserActivity) {
     print("[NativeBridge] 📱 handleUserActivity: \(userActivity.activityType)")
-    if let intent = userActivity.interaction?.intent as? INStartCallIntent {
+    if #available(iOS 13.0, *), let intent = userActivity.interaction?.intent as? INStartCallIntent {
       if let person = intent.contacts?.first, let handle = person.personHandle?.value, !handle.isEmpty {
-        sendDialIntent(handle)
-        return
-      }
-      if let callRecord = intent.callRecordToStart, let handle = callRecord.caller?.personHandle?.value, !handle.isEmpty {
         sendDialIntent(handle)
         return
       }
     } else if let intent = userActivity.interaction?.intent as? INStartAudioCallIntent {
       if let person = intent.contacts?.first, let handle = person.personHandle?.value, !handle.isEmpty {
+        sendDialIntent(handle)
+        return
+      }
+      if let callRecord = intent.callRecordToStart, let handle = callRecord.caller?.personHandle?.value, !handle.isEmpty {
         sendDialIntent(handle)
         return
       }

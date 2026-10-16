@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
@@ -33,6 +34,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
 
   late AnimationController _radarController;
   late AnimationController _syncAnimController;
+  StreamSubscription<bool>? _connectionSub;
 
   @override
   void initState() {
@@ -42,10 +44,27 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     _cloudUrlController.text = RelayClient.instance.cloudRelayUrl;
     _pairingKeyController.text = RelayClient.instance.pairingKey;
 
+    final isConnected = RelayClient.instance.isConnected;
     _radarController = AnimationController(
       vsync: this,
-      duration: const Duration(seconds: 3),
-    )..repeat();
+      duration: const Duration(milliseconds: 1400),
+    );
+    if (!isConnected) {
+      _radarController.repeat();
+    }
+
+    _connectionSub = RelayClient.instance.connectionStream.listen((connected) {
+      if (mounted) {
+        setState(() {
+          if (connected) {
+            _radarController.stop();
+          } else {
+            _radarController.duration = const Duration(milliseconds: 1400);
+            _radarController.repeat();
+          }
+        });
+      }
+    });
 
     _syncAnimController = AnimationController(
       vsync: this,
@@ -57,6 +76,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
 
   @override
   void dispose() {
+    _connectionSub?.cancel();
     _radarController.dispose();
     _syncAnimController.dispose();
     _ipController.dispose();
@@ -921,17 +941,17 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 2. Automated Auto-Discovery Card with Live Animated Radar Scanner
+  /// 2. Automated Auto-Discovery Card with Live Animated Radar Scanner / Target Lock
   Widget _buildAutomatedDiscoveryCard(bool isConnected, bool isDark) {
     return GlassCard(
       borderRadius: 22,
       padding: const EdgeInsets.all(16),
       child: InkWell(
         borderRadius: BorderRadius.circular(20),
-        onTap: _isDiscovering ? null : _autoDiscover,
+        onTap: isConnected ? _testPing : (_isDiscovering ? null : _autoDiscover),
         child: Row(
           children: [
-            // Radar visual scanner animation
+            // Radar visual scanner animation / Target locked reticle
             AnimatedBuilder(
               animation: _radarController,
               builder: (context, child) {
@@ -952,25 +972,30 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 children: [
                   Row(
                     children: [
-                      Text(
-                        _isDiscovering ? 'Scanning Mesh Network...' : 'Auto-Discover Vivo S1',
-                        style: TextStyle(
-                          color: isDark ? Colors.white : Colors.black87,
-                          fontSize: 16,
-                          fontWeight: FontWeight.bold,
+                      Flexible(
+                        child: Text(
+                          isConnected
+                              ? 'Vivo S1 Linked & Locked'
+                              : (_isDiscovering ? 'Scanning Mesh Network...' : 'Searching for Vivo S1...'),
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87,
+                            fontSize: 16,
+                            fontWeight: FontWeight.bold,
+                          ),
+                          overflow: TextOverflow.ellipsis,
                         ),
                       ),
                       const SizedBox(width: 6),
                       Container(
                         padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
                         decoration: BoxDecoration(
-                          color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.15),
+                          color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue).withValues(alpha: 0.15),
                           borderRadius: BorderRadius.circular(6),
                         ),
-                        child: const Text(
-                          'AUTOMATED',
+                        child: Text(
+                          isConnected ? 'LINK ACTIVE' : (_isDiscovering ? 'SCANNING' : 'SUPERFAST SEARCH'),
                           style: TextStyle(
-                            color: LiquidGlassTheme.iosBlue,
+                            color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue,
                             fontSize: 9,
                             fontWeight: FontWeight.w800,
                           ),
@@ -980,9 +1005,11 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                   ),
                   const SizedBox(height: 3),
                   Text(
-                    _isDiscovering
-                        ? 'Broadcasting UDP :8081 & scanning standard hotspot gateways...'
-                        : 'Probes 192.168.43.1 hotspot gateway, local subnets & auto-pairs',
+                    isConnected
+                        ? 'Connected at ${RelayClient.instance.hostIp}:${RelayClient.instance.hostPort} • Background search stopped'
+                        : (_isDiscovering
+                            ? 'Broadcasting UDP :8081 & scanning standard hotspot gateways...'
+                            : 'Auto-probing Hotspot 192.168.43.1 & UDP broadcast in background'),
                     style: TextStyle(
                       color: LiquidGlassTheme.textSecondary,
                       fontSize: 12,
@@ -995,16 +1022,18 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             Container(
               padding: const EdgeInsets.all(8),
               decoration: BoxDecoration(
-                color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.15),
+                color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue).withValues(alpha: 0.15),
                 shape: BoxShape.circle,
               ),
-              child: _isDiscovering
-                  ? const SizedBox(
-                      width: 20,
-                      height: 20,
-                      child: CircularProgressIndicator(strokeWidth: 2, color: LiquidGlassTheme.iosBlue),
-                    )
-                  : const Icon(Icons.arrow_forward_ios_rounded, size: 16, color: LiquidGlassTheme.iosBlue),
+              child: isConnected
+                  ? const Icon(Icons.check_circle_rounded, size: 18, color: LiquidGlassTheme.gsmGreen)
+                  : (_isDiscovering
+                      ? const SizedBox(
+                          width: 18,
+                          height: 18,
+                          child: CircularProgressIndicator(strokeWidth: 2, color: LiquidGlassTheme.iosBlue),
+                        )
+                      : const Icon(Icons.radar_rounded, size: 18, color: LiquidGlassTheme.iosBlue)),
             ),
           ],
         ),
@@ -1948,59 +1977,96 @@ class _RadarScopePainter extends CustomPainter {
     final center = Offset(size.width / 2, size.height / 2);
     final maxRadius = size.width / 2;
 
-    // Scope background
-    final bgPaint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.08)
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, maxRadius, bgPaint);
+    if (isConnected) {
+      // LOCKED & CONNECTED STATE: Solid, calm target-lock reticle (no spinning sweep)
+      final bgPaint = Paint()
+        ..color = const Color(0xFF34C759).withValues(alpha: 0.10)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, maxRadius, bgPaint);
 
-    // Range rings
-    final ringPaint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.25)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 1.0;
+      // Range rings in Apple Green
+      final ringPaint = Paint()
+        ..color = const Color(0xFF34C759).withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.2;
 
-    canvas.drawCircle(center, maxRadius * 0.4, ringPaint);
-    canvas.drawCircle(center, maxRadius * 0.75, ringPaint);
-    canvas.drawCircle(center, maxRadius, ringPaint);
+      canvas.drawCircle(center, maxRadius * 0.45, ringPaint);
+      canvas.drawCircle(center, maxRadius * 0.8, ringPaint);
+      canvas.drawCircle(center, maxRadius, ringPaint);
 
-    // Crosshairs
-    final crossPaint = Paint()
-      ..color = const Color(0xFF007AFF).withValues(alpha: 0.2)
-      ..strokeWidth = 0.8;
-    canvas.drawLine(Offset(center.dx, 0), Offset(center.dx, size.height), crossPaint);
-    canvas.drawLine(Offset(0, center.dy), Offset(size.width, center.dy), crossPaint);
+      // Crosshair Reticle Markers
+      final crossPaint = Paint()
+        ..color = const Color(0xFF34C759).withValues(alpha: 0.5)
+        ..strokeWidth = 1.4;
 
-    // Rotating Radar Sweep Beam
-    final sweepPaint = Paint()
-      ..shader = SweepGradient(
-        startAngle: 0.0,
-        endAngle: math.pi / 2,
-        colors: [
-          (isConnected ? const Color(0xFF34C759) : const Color(0xFF007AFF)).withValues(alpha: 0.0),
-          (isConnected ? const Color(0xFF34C759) : const Color(0xFF007AFF)).withValues(alpha: 0.4),
-        ],
-        transform: GradientRotation(rotation),
-      ).createShader(Rect.fromCircle(center: center, radius: maxRadius))
-      ..style = PaintingStyle.fill;
+      canvas.drawLine(Offset(center.dx, center.dy - maxRadius), Offset(center.dx, center.dy - maxRadius * 0.65), crossPaint);
+      canvas.drawLine(Offset(center.dx, center.dy + maxRadius * 0.65), Offset(center.dx, center.dy + maxRadius), crossPaint);
+      canvas.drawLine(Offset(center.dx - maxRadius, center.dy), Offset(center.dx - maxRadius * 0.65, center.dy), crossPaint);
+      canvas.drawLine(Offset(center.dx + maxRadius * 0.65, center.dy), Offset(center.dx + maxRadius, center.dy), crossPaint);
 
-    canvas.drawCircle(center, maxRadius, sweepPaint);
+      // Solid Center Lock Dot & Bullseye Ring
+      final dotPaint = Paint()
+        ..color = const Color(0xFF34C759)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, 4.0, dotPaint);
 
-    // Center Blinking / Glowing Target Dot
-    final targetColor = isConnected
-        ? const Color(0xFF34C759)
-        : (isScanning ? const Color(0xFF007AFF) : Colors.orangeAccent);
+      final glowPaint = Paint()
+        ..color = const Color(0xFF34C759).withValues(alpha: 0.3)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3;
+      canvas.drawCircle(center, 7.0, glowPaint);
+    } else {
+      // SEARCHING STATE: Superfast rotating radar sweep
+      final bgPaint = Paint()
+        ..color = const Color(0xFF007AFF).withValues(alpha: 0.08)
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, maxRadius, bgPaint);
 
-    final dotPaint = Paint()
-      ..color = targetColor
-      ..style = PaintingStyle.fill;
-    canvas.drawCircle(center, 3.5, dotPaint);
+      // Range rings
+      final ringPaint = Paint()
+        ..color = const Color(0xFF007AFF).withValues(alpha: 0.25)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 1.0;
 
-    final glowPaint = Paint()
-      ..color = targetColor.withValues(alpha: 0.35)
-      ..style = PaintingStyle.stroke
-      ..strokeWidth = 3;
-    canvas.drawCircle(center, 5.5, glowPaint);
+      canvas.drawCircle(center, maxRadius * 0.4, ringPaint);
+      canvas.drawCircle(center, maxRadius * 0.75, ringPaint);
+      canvas.drawCircle(center, maxRadius, ringPaint);
+
+      // Crosshairs
+      final crossPaint = Paint()
+        ..color = const Color(0xFF007AFF).withValues(alpha: 0.2)
+        ..strokeWidth = 0.8;
+      canvas.drawLine(Offset(center.dx, 0), Offset(center.dx, size.height), crossPaint);
+      canvas.drawLine(Offset(0, center.dy), Offset(size.width, center.dy), crossPaint);
+
+      // Rotating Radar Sweep Beam (Vibrant Cyan/Blue)
+      final sweepPaint = Paint()
+        ..shader = SweepGradient(
+          startAngle: 0.0,
+          endAngle: math.pi / 2,
+          colors: [
+            const Color(0xFF007AFF).withValues(alpha: 0.0),
+            const Color(0xFF007AFF).withValues(alpha: 0.45),
+          ],
+          transform: GradientRotation(rotation),
+        ).createShader(Rect.fromCircle(center: center, radius: maxRadius))
+        ..style = PaintingStyle.fill;
+
+      canvas.drawCircle(center, maxRadius, sweepPaint);
+
+      // Center Search Beacon
+      final targetColor = isScanning ? const Color(0xFF007AFF) : Colors.orangeAccent;
+      final dotPaint = Paint()
+        ..color = targetColor
+        ..style = PaintingStyle.fill;
+      canvas.drawCircle(center, 3.5, dotPaint);
+
+      final glowPaint = Paint()
+        ..color = targetColor.withValues(alpha: 0.35)
+        ..style = PaintingStyle.stroke
+        ..strokeWidth = 3;
+      canvas.drawCircle(center, 5.5, glowPaint);
+    }
   }
 
   @override

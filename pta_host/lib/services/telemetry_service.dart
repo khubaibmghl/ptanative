@@ -22,12 +22,20 @@ class TelemetryService {
   String activeNetworkLabel = 'Vivo Hotspot (192.168.43.1)';
   bool isHotspotBroadcasting = false;
 
-  TelemetryService({required this.server});
+  // Cache of last broadcasted values to prevent redundant radio wakeups
+  int? _lastBroadcastBattery;
+  bool? _lastBroadcastCharging;
+  String? _lastBroadcastNetwork;
+  int _lastBroadcastTime = 0;
+
+  TelemetryService({required this.server}) {
+    server.telemetryService = this;
+  }
 
   void start() {
     _telemetryTimer?.cancel();
-    _telemetryTimer = Timer.periodic(const Duration(seconds: 8), (_) => updateAndBroadcast());
-    updateAndBroadcast();
+    _telemetryTimer = Timer.periodic(const Duration(seconds: 15), (_) => updateAndBroadcast());
+    updateAndBroadcast(force: true);
   }
 
   void stop() {
@@ -35,14 +43,37 @@ class TelemetryService {
     _telemetryTimer = null;
   }
 
-  Future<void> updateAndBroadcast() async {
+  Future<void> updateAndBroadcast({bool force = false}) async {
     try {
       batteryLevel = await _battery.batteryLevel;
       final state = await _battery.batteryState;
       isCharging = (state == BatteryState.charging || state == BatteryState.full);
     } catch (_) {}
 
-    await refreshNetworkInterfaces();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final bool batteryChanged = (_lastBroadcastBattery != batteryLevel);
+    final bool chargingChanged = (_lastBroadcastCharging != isCharging);
+    final bool intervalExpired = (now - _lastBroadcastTime >= 30000); // 30s gentle fallback
+
+    if (!force && !batteryChanged && !chargingChanged && !intervalExpired) {
+      // Data is unchanged and interval has not elapsed; skip radio wakeup
+      return;
+    }
+
+    if (force || intervalExpired) {
+      await refreshNetworkInterfaces();
+    }
+
+    final bool networkChanged = (_lastBroadcastNetwork != activeNetworkLabel);
+
+    if (!force && !batteryChanged && !chargingChanged && !networkChanged && !intervalExpired) {
+      return;
+    }
+
+    _lastBroadcastBattery = batteryLevel;
+    _lastBroadcastCharging = isCharging;
+    _lastBroadcastNetwork = activeNetworkLabel;
+    _lastBroadcastTime = now;
 
     final status = DeviceStatusModel(
       batteryLevel: batteryLevel,

@@ -23,6 +23,7 @@ class RelayServer {
   final VoiceTunnelService voiceTunnel = VoiceTunnelService();
   AndroidContentService? contentService;
   dynamic telephonyMonitor;
+  dynamic telemetryService;
 
   final List<WebSocketChannel> _connectedSockets = [];
   final List<ActivityLog> activityLogs = [];
@@ -86,6 +87,9 @@ class RelayServer {
           'type': 'SYNC_STATE',
           'data': currentCallState,
         }));
+        try {
+          telemetryService?.updateAndBroadcast(force: true);
+        } catch (_) {}
 
         socket.stream.listen(
           (message) {

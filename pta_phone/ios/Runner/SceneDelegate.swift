@@ -29,9 +29,17 @@ class SceneDelegate: FlutterSceneDelegate {
   }
 
   private func handleIncomingUrl(_ url: URL) {
-    if url.scheme == "tel" || url.scheme == "pta" {
-      let raw = url.resourceSpecifier.removingPercentEncoding ?? url.host ?? ""
-      let number = raw.replacingOccurrences(of: "//", with: "")
+    let scheme = url.scheme?.lowercased() ?? ""
+    if scheme == "tel" || scheme == "pta" {
+      var number = ""
+      if let spec = (url as NSURL).resourceSpecifier?.removingPercentEncoding {
+        number = spec
+      } else if let host = url.host {
+        number = host
+      } else {
+        number = url.path
+      }
+      number = number.replacingOccurrences(of: "//", with: "").trimmingCharacters(in: .whitespacesAndNewlines)
       if !number.isEmpty {
         AppDelegate.shared?.sendDialIntent(number)
       }

@@ -247,7 +247,7 @@ class RelayClient {
     return null;
   }
 
-  /// High-Speed Multi-Layer Auto-Discovery (Hotspot Auto-Lock -> Subnet Sweep -> UDP Broadcast)
+  /// High-Speed Multi-Layer Auto-Discovery (Hotspot Auto-Lock -> UDP Broadcast -> Subnet Sweep)
   Future<String?> discoverHostIp() async {
     // 1. Check Hotspot / Gateway direct probe (0 ms for Hotspot)
     final directIp = await probeDirectGateway();
@@ -258,27 +258,7 @@ class RelayClient {
       return directIp;
     }
 
-    // 2. High-speed parallel subnet sweep (bypasses router AP isolation / UDP block)
-    try {
-      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
-      for (final iface in interfaces) {
-        for (final addr in iface.addresses) {
-          final parts = addr.address.split('.');
-          if (parts.length == 4 && parts[0] != '127') {
-            final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
-            final swept = await sweepSubnet(prefix);
-            if (swept != null) {
-              hostIp = swept;
-              final prefs = await SharedPreferences.getInstance();
-              await prefs.setString('host_ip', hostIp);
-              return swept;
-            }
-          }
-        }
-      }
-    } catch (_) {}
-
-    // 3. Fallback UDP Broadcast Probe
+    // 2. High-speed parallel UDP Broadcast Probe (10-20ms)
     try {
       final socket = await RawDatagramSocket.bind(InternetAddress.anyIPv4, 0);
       socket.broadcastEnabled = true;
@@ -325,18 +305,39 @@ class RelayClient {
         }
       });
 
-      final discoveredIp = await completer.future.timeout(const Duration(milliseconds: 1500), onTimeout: () => null);
+      final discoveredIp = await completer.future.timeout(const Duration(milliseconds: 600), onTimeout: () => null);
       socket.close();
 
       if (discoveredIp != null && discoveredIp.isNotEmpty) {
+        logDiagnostic('⚡ UDP Broadcast discovered host at $discoveredIp');
         hostIp = discoveredIp;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('host_ip', hostIp);
+        return discoveredIp;
       }
-      return discoveredIp;
-    } catch (_) {
-      return null;
-    }
+    } catch (_) {}
+
+    // 3. Fallback: High-speed parallel subnet sweep (bypasses router AP isolation / UDP block)
+    try {
+      final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
+      for (final iface in interfaces) {
+        for (final addr in iface.addresses) {
+          final parts = addr.address.split('.');
+          if (parts.length == 4 && parts[0] != '127') {
+            final prefix = '${parts[0]}.${parts[1]}.${parts[2]}';
+            final swept = await sweepSubnet(prefix);
+            if (swept != null) {
+              hostIp = swept;
+              final prefs = await SharedPreferences.getInstance();
+              await prefs.setString('host_ip', hostIp);
+              return swept;
+            }
+          }
+        }
+      }
+    } catch (_) {}
+
+    return null;
   }
 
   Future<void> updateHostConfig(String ip, int port, {String? cloudUrl, String? key}) async {
@@ -456,6 +457,8 @@ class RelayClient {
     logDiagnostic('Disconnect requested explicitly');
     _pingTimer?.cancel();
     _pingTimer = null;
+    _reconnectTimer?.cancel();
+    _reconnectTimer = null;
     _isConnected = false;
     isConnectedViaCloud = false;
     _wsSubscription?.cancel();
@@ -472,6 +475,8 @@ class RelayClient {
     _isConnected = false;
     isConnectedViaCloud = false;
     _connectionController.add(false);
+    logDiagnostic('⚡ Starting superfast background reconnection loop...');
+    _startReconnectLoop();
   }
 
   bool isAppPaused = false;
@@ -484,24 +489,27 @@ class RelayClient {
 
   void _startPingHeartbeat() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 8), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 16), (_) {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
         // Avoid aggressive disconnect if app is in background/screen locked where iOS coalesces timers
-        if (elapsedSincePong > 90000 && !isAppPaused) {
-          logDiagnostic('Ping watchdog timeout (>90s no pong). Disconnecting to trigger instant reconnect.');
+        if (elapsedSincePong > 60000 && !isAppPaused) {
+          logDiagnostic('Ping watchdog timeout (>60s no response). Disconnecting to trigger instant reconnect.');
           disconnect();
           connect();
           return;
         }
-        try {
-          _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
-          _channel!.sink.add(RelayMessage.ping().toJsonString());
-        } catch (e) {
-          logDiagnostic('Ping Send Error: $e');
-          _onDisconnected();
-          connect();
+        // Only send PING if no packets were received from the host in the last 15 seconds
+        if (now - _lastPongTime >= 15000) {
+          try {
+            _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
+            _channel!.sink.add(RelayMessage.ping().toJsonString());
+          } catch (e) {
+            logDiagnostic('Ping Send Error: $e');
+            _onDisconnected();
+            connect();
+          }
         }
       }
     });
@@ -535,15 +543,20 @@ class RelayClient {
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
     _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
-      if (!_isConnected) {
-        final discoveredIp = await discoverHostIp();
-        if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
-          hostIp = discoveredIp;
-          final prefs = await SharedPreferences.getInstance();
-          await prefs.setString('host_ip', hostIp);
-        }
-        connect();
+      if (_isConnected) {
+        logDiagnostic('✅ Devices connected: stopping background search.');
+        timer.cancel();
+        _reconnectTimer = null;
+        return;
       }
+      logDiagnostic('⚡ Superfast background search running for Vivo S1...');
+      final discoveredIp = await discoverHostIp();
+      if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
+        hostIp = discoveredIp;
+        final prefs = await SharedPreferences.getInstance();
+        await prefs.setString('host_ip', hostIp);
+      }
+      connect();
     });
   }
 
@@ -567,9 +580,15 @@ class RelayClient {
       if (!_isConnected) {
         _isConnected = true;
         logDiagnostic('Socket Connected Successfully!');
+        _reconnectTimer?.cancel();
+        _reconnectTimer = null;
+        logDiagnostic('🛑 Background search process stopped (connection established).');
         _connectionController.add(true);
         syncAll();
       }
+
+      // Any valid message received from host confirms link liveness
+      _lastPongTime = DateTime.now().millisecondsSinceEpoch;
 
       if (msg.type != 'PONG') {
         logDiagnostic('RX [${msg.type}]: ${msg.toJsonString()}');
@@ -577,7 +596,6 @@ class RelayClient {
 
       switch (msg.type) {
         case 'PONG':
-          _lastPongTime = DateTime.now().millisecondsSinceEpoch;
           if (_lastPingSentTimestamp > 0) {
             lastPingLatencyMs = _lastPongTime - _lastPingSentTimestamp;
           }
