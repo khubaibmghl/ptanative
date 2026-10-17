@@ -1,3 +1,5 @@
+import 'dart:io';
+import 'package:path_provider/path_provider.dart';
 import 'package:sqflite/sqflite.dart';
 import 'package:path/path.dart' as p;
 import 'package:pta_shared/pta_shared.dart';
@@ -388,8 +390,40 @@ class DatabaseHelper {
 
   Future<void> saveRecordings(List<CallRecordingModel> list) async {
     final db = await database;
+    Directory? docDir;
+    try {
+      docDir = await getApplicationDocumentsDirectory();
+    } catch (_) {}
+
     await db.transaction((txn) async {
       for (final rec in list) {
+        String? resolvedLocalPath = rec.localPath;
+
+        // If localPath is null in incoming model, check if existing record already had a local_path
+        if (resolvedLocalPath == null || resolvedLocalPath.isEmpty) {
+          final existing = await txn.query(
+            'call_recordings',
+            columns: ['local_path'],
+            where: 'filename = ?',
+            whereArgs: [rec.filename],
+            limit: 1,
+          );
+          if (existing.isNotEmpty && existing.first['local_path'] != null) {
+            final oldPath = existing.first['local_path'] as String;
+            if (oldPath.isNotEmpty && File(oldPath).existsSync()) {
+              resolvedLocalPath = oldPath;
+            }
+          }
+        }
+
+        // Check if the physical file already exists on iPhone in /Documents/recordings/
+        if ((resolvedLocalPath == null || resolvedLocalPath.isEmpty) && docDir != null) {
+          final candidate = File('${docDir.path}/recordings/${rec.filename}');
+          if (candidate.existsSync() && candidate.lengthSync() > 0) {
+            resolvedLocalPath = candidate.path;
+          }
+        }
+
         await txn.insert(
           'call_recordings',
           {
@@ -400,7 +434,7 @@ class DatabaseHelper {
             'timestamp': rec.timestamp,
             'size_bytes': rec.sizeBytes,
             'duration_seconds': rec.durationSeconds,
-            'local_path': rec.localPath,
+            'local_path': resolvedLocalPath,
           },
           conflictAlgorithm: ConflictAlgorithm.replace,
         );
@@ -418,29 +452,70 @@ class DatabaseHelper {
     );
   }
 
-  Future<List<CallRecordingModel>> getLocalRecordings({String? number, int limit = 10}) async {
+  Future<List<CallRecordingModel>> getLocalRecordings({
+    String? number,
+    String? name,
+    int? callTimestamp,
+    int limit = 20,
+  }) async {
     final db = await database;
+    Directory? docDir;
+    try {
+      docDir = await getApplicationDocumentsDirectory();
+    } catch (_) {}
+
     List<Map<String, dynamic>> maps;
+
+    final whereClauses = <String>[];
+    final whereArgs = <dynamic>[];
+
     if (number != null && number.trim().isNotEmpty) {
       final clean = number.trim();
       final norm = PhoneNumberNormalizer.normalize(clean);
       final sig = norm.length >= 7 ? norm.substring(norm.length - 7) : norm;
-      maps = await db.query(
-        'call_recordings',
-        where: 'remote_number LIKE ?',
-        whereArgs: ['%$sig%'],
-        orderBy: 'timestamp DESC',
-        limit: limit,
-      );
-    } else {
-      maps = await db.query(
-        'call_recordings',
-        orderBy: 'timestamp DESC',
-        limit: limit,
-      );
+
+      if (name != null && name.trim().isNotEmpty && name.trim() != number.trim()) {
+        whereClauses.add('(remote_number LIKE ? OR caller_name LIKE ?)');
+        whereArgs.add('%$sig%');
+        whereArgs.add('%${name.trim()}%');
+      } else {
+        whereClauses.add('remote_number LIKE ?');
+        whereArgs.add('%$sig%');
+      }
+    } else if (name != null && name.trim().isNotEmpty) {
+      whereClauses.add('caller_name LIKE ?');
+      whereArgs.add('%${name.trim()}%');
     }
 
-    return maps.map((m) => CallRecordingModel.fromJson(m)).toList();
+    final whereString = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
+
+    maps = await db.query(
+      'call_recordings',
+      where: whereString,
+      whereArgs: whereArgs.isNotEmpty ? whereArgs : null,
+      orderBy: 'timestamp DESC',
+      limit: limit,
+    );
+
+    final results = maps.map((m) {
+      final rec = CallRecordingModel.fromJson(m);
+      if ((rec.localPath == null || rec.localPath!.isEmpty) && docDir != null) {
+        final candidate = File('${docDir.path}/recordings/${rec.filename}');
+        if (candidate.existsSync() && candidate.lengthSync() > 0) {
+          return rec.copyWith(localPath: candidate.path);
+        }
+      }
+      return rec;
+    }).toList();
+
+    if (callTimestamp != null && callTimestamp > 0 && results.isNotEmpty) {
+      results.sort((a, b) {
+        final diffA = (a.timestamp - callTimestamp).abs();
+        final diffB = (b.timestamp - callTimestamp).abs();
+        return diffA.compareTo(diffB);
+      });
+    }
+    return results;
   }
 
   Future<void> clearAll() async {

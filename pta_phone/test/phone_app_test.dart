@@ -1,5 +1,6 @@
 import 'package:flutter_test/flutter_test.dart';
 import 'package:pta_shared/pta_shared.dart';
+import 'package:pta_phone/services/relay_client.dart';
 
 void main() {
   group('PTA Phone iOS Client Logic Tests', () {
@@ -45,6 +46,39 @@ void main() {
 
       expect(log.durationFormatted, equals('02:05'));
       expect(log.durationText, equals('2m 5s'));
+    });
+
+    test('ActiveCallInfo state progression and timer semantics', () {
+      // 1. Dialing: startTime is 0, duration is 0
+      final dialingCall = ActiveCallInfo(
+        number: '03001234567',
+        callerName: 'Dr. Tariq',
+        label: 'Clinic',
+        startTime: 0,
+        durationSeconds: 0,
+        isIncoming: false,
+        state: PhoneCallState.dialing,
+      );
+      expect(dialingCall.state, equals(PhoneCallState.dialing));
+      expect(dialingCall.startTime, equals(0));
+      expect(dialingCall.durationSeconds, equals(0));
+
+      // 2. Transition to connected via copyWith
+      final connectedTime = DateTime.now().millisecondsSinceEpoch;
+      final connectedCall = dialingCall.copyWith(
+        state: PhoneCallState.connected,
+        startTime: connectedTime,
+      );
+      expect(connectedCall.state, equals(PhoneCallState.connected));
+      expect(connectedCall.startTime, equals(connectedTime));
+
+      // 3. Transition to disconnected
+      final disconnectedCall = connectedCall.copyWith(
+        state: PhoneCallState.disconnected,
+        durationSeconds: 42,
+      );
+      expect(disconnectedCall.state, equals(PhoneCallState.disconnected));
+      expect(disconnectedCall.durationSeconds, equals(42));
     });
   });
 }

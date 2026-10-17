@@ -18,6 +18,7 @@ class TelephonyMonitor {
   bool _callLogged = false;
 
   Timer? _durationTicker;
+  Timer? _dialingFallbackTimer;
   int _currentDurationSeconds = 0;
 
   TelephonyMonitor({required this.server});
@@ -39,7 +40,8 @@ class TelephonyMonitor {
 
         final state = event['state']?.toString() ?? 'IDLE';
         final num = event['incomingNumber']?.toString() ?? '';
-        _processNativeCallState(state, num);
+        final eventTs = event['timestamp'] as int?;
+        _processNativeCallState(state, num, eventTimestamp: eventTs);
       }
     }, onError: (_) {});
 
@@ -47,6 +49,8 @@ class TelephonyMonitor {
   }
 
   void stop() {
+    _dialingFallbackTimer?.cancel();
+    _dialingFallbackTimer = null;
     _durationTicker?.cancel();
     _durationTicker = null;
     _nativeStateSubscription?.cancel();
@@ -63,30 +67,37 @@ class TelephonyMonitor {
     }
   }
 
-  void _processNativeCallState(String state, String incomingNum) {
+  void _processNativeCallState(String state, String incomingNum, {int? eventTimestamp}) {
     final now = DateTime.now().millisecondsSinceEpoch;
-    if (incomingNum.trim().isNotEmpty) {
-      _activeNumber = incomingNum.trim();
+    final cleanIncoming = incomingNum.trim();
+    if (cleanIncoming.isNotEmpty) {
+      _activeNumber = cleanIncoming;
     }
     debugPrint('[TELEPHONY_MONITOR] State Event: $state | Num: $incomingNum | ActiveNum: $_activeNumber | LastPhase: $_lastPhase');
 
     if (state == 'RINGING') {
+      _dialingFallbackTimer?.cancel();
+      _dialingFallbackTimer = null;
       if (_lastPhase != 'RINGING') {
         _lastPhase = 'RINGING';
         _durationTicker?.cancel();
         _currentDurationSeconds = 0;
         _ringStartTime = now;
-        if (incomingNum.isNotEmpty) _activeNumber = incomingNum;
+        // Strictly overwrite with this incoming call's number (empty if unknown/private)
+        // to prevent previous call's contact from leaking into new call!
+        _activeNumber = cleanIncoming;
         _talkStartTime = 0;
         _callLogged = false;
 
         String resolvedName = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
         String? resolvedLabel;
-        for (final c in server.cachedContacts) {
-          if (c.matchesNumber(_activeNumber)) {
-            resolvedName = c.displayName;
-            resolvedLabel = c.getLabelForNumber(_activeNumber);
-            break;
+        if (_activeNumber.isNotEmpty) {
+          for (final c in server.cachedContacts) {
+            if (c.matchesNumber(_activeNumber)) {
+              resolvedName = c.displayName;
+              resolvedLabel = c.getLabelForNumber(_activeNumber);
+              break;
+            }
           }
         }
 
@@ -111,7 +122,7 @@ class TelephonyMonitor {
         _lastPhase = 'DIALING';
         _durationTicker?.cancel();
         _currentDurationSeconds = 0;
-        _talkStartTime = now;
+        _talkStartTime = 0; // Call is NOT connected yet!
         _callLogged = false;
         final dialNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
         server.logEvent('Dialing Outgoing', dialNum, ActivityType.call);
@@ -128,84 +139,27 @@ class TelephonyMonitor {
           'duration_formatted': '00:00',
         });
 
-        // Automatically transition outgoing OFFHOOK to ACTIVE after telecom setup
-        Future.delayed(const Duration(milliseconds: 1200), () {
+        // 25-second fallback for networks where recording/audio callbacks are delayed
+        _dialingFallbackTimer?.cancel();
+        _dialingFallbackTimer = Timer(const Duration(seconds: 25), () {
           if (_lastPhase == 'DIALING') {
-            _lastPhase = 'ACTIVE';
-            _talkStartTime = DateTime.now().millisecondsSinceEpoch;
-            server.logEvent('Call Connected', 'Outgoing call active with $dialNum', ActivityType.call);
-            server.currentCallState.addAll({
-              'is_in_call': true,
-              'is_connected': true,
-              'status': 'Active Call',
-              'number': dialNum,
-              'duration_seconds': 0,
-              'duration_formatted': '00:00',
-            });
-            server.broadcast(RelayMessage.callActive(
-              number: dialNum,
-              startTime: _talkStartTime,
-            ));
-
-            _durationTicker?.cancel();
-            _currentDurationSeconds = 0;
-            _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
-              final tickNow = DateTime.now().millisecondsSinceEpoch;
-              _currentDurationSeconds = ((tickNow - _talkStartTime) ~/ 1000);
-              final m = _currentDurationSeconds ~/ 60;
-              final s = _currentDurationSeconds % 60;
-              final formatted = '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-              server.currentCallState['duration_seconds'] = _currentDurationSeconds;
-              server.currentCallState['duration_formatted'] = formatted;
-              server.broadcast(RelayMessage.callTick(
-                duration: _currentDurationSeconds,
-                formatted: formatted,
-              ));
-            });
+            debugPrint('[TELEPHONY_MONITOR] Dialing fallback timer triggered: transitioning to ACTIVE');
+            _transitionToActive(dialNum, DateTime.now().millisecondsSinceEpoch);
           }
         });
       }
-    } else if (state == 'ACTIVE' || (state == 'OFFHOOK' && _lastPhase == 'RINGING')) {
+    } else if (state == 'ACTIVE' || (state == 'OFFHOOK' && _lastPhase == 'RINGING') || (state == 'ACTIVE' && _lastPhase == 'DIALING')) {
+      _dialingFallbackTimer?.cancel();
+      _dialingFallbackTimer = null;
       if (_lastPhase != 'ACTIVE') {
-        _lastPhase = 'ACTIVE';
-        _talkStartTime = now;
-        _ringStartTime = 0;
-        _callLogged = false;
         final activeNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
-        server.logEvent('Call Connected', 'Call active with $activeNum', ActivityType.call);
-        
-        server.currentCallState.addAll({
-          'is_in_call': true,
-          'is_connected': true,
-          'status': 'Active Call',
-          'number': activeNum,
-          'duration_seconds': 0,
-          'duration_formatted': '00:00',
-        });
-
-        server.broadcast(RelayMessage.callActive(
-          number: activeNum,
-          startTime: _talkStartTime,
-        ));
-
-        // Authoritative 1-second duration tick based on monotonic elapsed time
-        _durationTicker?.cancel();
-        _currentDurationSeconds = 0;
-        _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
-          final tickNow = DateTime.now().millisecondsSinceEpoch;
-          _currentDurationSeconds = ((tickNow - _talkStartTime) ~/ 1000);
-          final m = _currentDurationSeconds ~/ 60;
-          final s = _currentDurationSeconds % 60;
-          final formatted = '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
-          server.currentCallState['duration_seconds'] = _currentDurationSeconds;
-          server.currentCallState['duration_formatted'] = formatted;
-          server.broadcast(RelayMessage.callTick(
-            duration: _currentDurationSeconds,
-            formatted: formatted,
-          ));
-        });
+        final connectTime = eventTimestamp ?? now;
+        _transitionToActive(activeNum, connectTime);
       }
     } else if (state == 'IDLE') {
+      _dialingFallbackTimer?.cancel();
+      _dialingFallbackTimer = null;
+      _activeNumber = ''; // Guaranteed clear of active number on IDLE
       if (['ACTIVE', 'RINGING', 'DIALING'].contains(_lastPhase)) {
         _durationTicker?.cancel();
         _durationTicker = null;
@@ -217,7 +171,7 @@ class TelephonyMonitor {
               ? ringSec
               : (_talkStartTime > 0
                   ? ((now - _talkStartTime) ~/ 1000)
-                  : _currentDurationSeconds);
+                  : 0);
           final finalNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
           server.logEvent(
             isMissed ? 'Missed Call' : 'Call Ended',
@@ -253,5 +207,46 @@ class TelephonyMonitor {
         _currentDurationSeconds = 0;
       }
     }
+  }
+
+  void _transitionToActive(String activeNum, int startTime) {
+    if (_lastPhase == 'ACTIVE') return;
+    _lastPhase = 'ACTIVE';
+    _talkStartTime = startTime;
+    _ringStartTime = 0;
+    _callLogged = false;
+
+    server.logEvent('Call Connected', 'Call active with $activeNum', ActivityType.call);
+    server.currentCallState.addAll({
+      'is_in_call': true,
+      'is_connected': true,
+      'status': 'Active Call',
+      'number': activeNum,
+      'duration_seconds': 0,
+      'duration_formatted': '00:00',
+    });
+
+    server.broadcast(RelayMessage.callActive(
+      number: activeNum,
+      startTime: _talkStartTime,
+    ));
+
+    // Authoritative 1-second duration tick based on monotonic elapsed time
+    _durationTicker?.cancel();
+    _currentDurationSeconds = 0;
+    _durationTicker = Timer.periodic(const Duration(seconds: 1), (_) {
+      final tickNow = DateTime.now().millisecondsSinceEpoch;
+      _currentDurationSeconds = ((tickNow - _talkStartTime) ~/ 1000);
+      if (_currentDurationSeconds < 0) _currentDurationSeconds = 0;
+      final m = _currentDurationSeconds ~/ 60;
+      final s = _currentDurationSeconds % 60;
+      final formatted = '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
+      server.currentCallState['duration_seconds'] = _currentDurationSeconds;
+      server.currentCallState['duration_formatted'] = formatted;
+      server.broadcast(RelayMessage.callTick(
+        duration: _currentDurationSeconds,
+        formatted: formatted,
+      ));
+    });
   }
 }

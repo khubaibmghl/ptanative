@@ -270,7 +270,8 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
       } else if (call.method == 'onNativeIncomingCall') {
         final number = call.arguments['number']?.toString() ?? '';
         final name = call.arguments['name']?.toString() ?? '';
-        final callId = call.arguments['callId']?.toString() ?? CallKitService.generateUuid();
+        final callId = call.arguments['callId']?.toString() ??
+            (number.isNotEmpty ? CallKitService.deterministicUuidForNumber(number) : CallKitService.generateUuid());
         if (number.isNotEmpty) {
           debugPrint('[NATIVE_BRIDGE] 📞 Received native incoming call intent for $number ($name)');
           await CallKitService.instance.showIncomingCall(
@@ -302,6 +303,13 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
         for (final call in calls) {
           if (call is Map) {
             final bodyMap = Map<String, dynamic>.from(call);
+            // CRITICAL: NEVER dial out if this call is an incoming call or already accepted!
+            final isIncoming = bodyMap['extra']?['isIncoming'] as bool? ?? false;
+            final isAccepted = bodyMap['isAccepted'] as bool? ?? false;
+            if (isIncoming || isAccepted) {
+              debugPrint('[CALLKIT_STARTUP] 📞 Active CallKit entry is incoming/accepted ($isIncoming/$isAccepted) -> Not dialing out');
+              continue;
+            }
             final number = bodyMap['handle']?.toString() ??
                            bodyMap['number']?.toString() ??
                            bodyMap['extra']?['number']?.toString() ?? '';
@@ -318,6 +326,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   void _setupCallKitListener() {
     CallKitService.instance.onEvent?.listen((event) {
       if (event == null) return;
+      debugPrint('[CALLKIT_EVENT] 📲 Received event: ${event.event}');
       switch (event.event) {
         case Event.actionCallStart:
           String number = '';
@@ -332,16 +341,37 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           }
           break;
         case Event.actionCallAccept:
+          debugPrint('[CALLKIT_EVENT] 🟢 User accepted call on CallKit');
           RelayClient.instance.answerCall();
+          CallKitService.instance.setCallConnected();
           break;
         case Event.actionCallDecline:
-        case Event.actionCallEnded:
+          debugPrint('[CALLKIT_EVENT] 🔴 User explicitly declined incoming call');
           RelayClient.instance.hangupCall();
           break;
-        case Event.actionCallTimeout:
-          // Protect active connected call from false timeout hangup
-          if (RelayClient.instance.currentActiveCall?.state != PhoneCallState.connected) {
+        case Event.actionCallEnded:
+          debugPrint('[CALLKIT_EVENT] ⏹️ CallKit actionCallEnded received');
+          // If this dismissal was triggered programmatically by the app or during answering, do NOT send hangup!
+          if (CallKitService.instance.isProgrammaticDismiss) {
+            debugPrint('[CALLKIT_EVENT] 🛡️ Ignoring programmatic CallKit dismissal event');
+            break;
+          }
+          if (RelayClient.instance.isAnsweringOrActive) {
+            // User tapped the red end call button in the native CallKit in-call screen
+            debugPrint('[CALLKIT_EVENT] 🛑 User tapped end call in native CallKit in-call screen');
             RelayClient.instance.hangupCall();
+          } else {
+            debugPrint('[CALLKIT_EVENT] 🛡️ Suppressed stray actionCallEnded during call transition');
+          }
+          break;
+        case Event.actionCallTimeout:
+          debugPrint('[CALLKIT_EVENT] ⏱️ CallKit actionCallTimeout received');
+          // Only hang up if call is still ringing and user never answered
+          if (!RelayClient.instance.isAnsweringOrActive &&
+              RelayClient.instance.currentActiveCall?.state == PhoneCallState.ringing) {
+            RelayClient.instance.hangupCall();
+          } else {
+            debugPrint('[CALLKIT_EVENT] 🛡️ Suppressed false timeout for active/answering call');
           }
           break;
         default:
@@ -461,7 +491,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     final s = (dur % 60).toString().padLeft(2, '0');
     final timeStr = callInfo.state == PhoneCallState.connected
         ? '$m:$s'
-        : (callInfo.state == PhoneCallState.ringing ? 'Ringing' : 'Calling');
+        : (callInfo.state == PhoneCallState.ringing
+            ? 'Ringing'
+            : (callInfo.state == PhoneCallState.disconnected ? 'Ended' : 'Calling'));
 
     return GestureDetector(
       onTap: () {

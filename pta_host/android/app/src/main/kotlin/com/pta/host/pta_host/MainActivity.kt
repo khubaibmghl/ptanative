@@ -4,14 +4,21 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.media.AudioManager
+import android.media.AudioRecordingConfiguration
+import android.media.MediaRecorder
 import android.net.Uri
 import android.os.Build
+import android.os.FileObserver
+import android.os.Handler
+import android.os.Looper
 import android.os.PowerManager
 import android.provider.Settings
 import android.telecom.TelecomManager
 import android.net.wifi.WifiManager
 import android.telephony.SmsManager
 import android.telephony.TelephonyManager
+import java.io.File
 import java.net.NetworkInterface
 import io.flutter.embedding.android.FlutterActivity
 import io.flutter.embedding.engine.FlutterEngine
@@ -23,6 +30,10 @@ class MainActivity : FlutterActivity() {
     private val EVENT_CHANNEL = "com.pta.host/telephony_events"
     private var eventSink: EventChannel.EventSink? = null
     private var phoneStateReceiver: BroadcastReceiver? = null
+    private var recordingFileObserver: FileObserver? = null
+    private var audioRecordingCallback: AudioManager.AudioRecordingCallback? = null
+    private var isCallMonitoringActive = false
+    private var lastEmittedActiveTimestamp = 0L
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -140,6 +151,15 @@ class MainActivity : FlutterActivity() {
                 if (action == TelephonyManager.ACTION_PHONE_STATE_CHANGED) {
                     val stateStr = intent.getStringExtra(TelephonyManager.EXTRA_STATE)
                     val incomingNumber = intent.getStringExtra(TelephonyManager.EXTRA_INCOMING_NUMBER) ?: ""
+
+                    if (stateStr == TelephonyManager.EXTRA_STATE_OFFHOOK) {
+                        startCallAnswerMonitoring()
+                    } else if (stateStr == TelephonyManager.EXTRA_STATE_IDLE) {
+                        stopCallAnswerMonitoring()
+                    } else if (stateStr == TelephonyManager.EXTRA_STATE_RINGING) {
+                        stopCallAnswerMonitoring()
+                    }
+
                     payload["type"] = "CALL"
                     payload["state"] = stateStr ?: "IDLE"
                     payload["incomingNumber"] = incomingNumber
@@ -188,11 +208,116 @@ class MainActivity : FlutterActivity() {
     }
 
     private fun unregisterPhoneStateReceiver() {
+        stopCallAnswerMonitoring()
         phoneStateReceiver?.let {
             try {
                 unregisterReceiver(it)
             } catch (_: Exception) {}
             phoneStateReceiver = null
+        }
+    }
+
+    private fun startCallAnswerMonitoring() {
+        if (isCallMonitoringActive) return
+        isCallMonitoringActive = true
+        android.util.Log.d("PTA_TELEPHONY", "Starting call answer detectors (Vivo FileObserver & AudioRecordingCallback)...")
+
+        // 1. Vivo Call Recording Inotify / FileObserver
+        // Vivo S1 begins writing .m4a file the exact second the call connects
+        try {
+            val candidateDirs = listOf(
+                File("/storage/emulated/0/Recordings/Record/Call"),
+                File("/storage/emulated/0/Record/Call")
+            )
+            for (dir in candidateDirs) {
+                if (dir.exists()) {
+                    val observer = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
+                        object : FileObserver(dir, CREATE or MOVED_TO) {
+                            override fun onEvent(event: Int, path: String?) {
+                                if (path != null && (path.endsWith(".m4a") || path.endsWith(".amr") || path.endsWith(".mp3") || path.endsWith(".aac"))) {
+                                    emitCallAnswered("VIVO_RECORDING_FILE", path)
+                                }
+                            }
+                        }
+                    } else {
+                        @Suppress("DEPRECATION")
+                        object : FileObserver(dir.absolutePath, CREATE or MOVED_TO) {
+                            override fun onEvent(event: Int, path: String?) {
+                                if (path != null && (path.endsWith(".m4a") || path.endsWith(".amr") || path.endsWith(".mp3") || path.endsWith(".aac"))) {
+                                    emitCallAnswered("VIVO_RECORDING_FILE", path)
+                                }
+                            }
+                        }
+                    }
+                    observer.startWatching()
+                    recordingFileObserver = observer
+                    android.util.Log.d("PTA_TELEPHONY", "Vivo Call Recording FileObserver active on ${dir.absolutePath}")
+                    break
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PTA_TELEPHONY", "Error setting up recording FileObserver: ${e.message}")
+        }
+
+        // 2. AudioManager AudioRecordingCallback (detects hardware VOICE_CALL recording activation)
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N) {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                if (audioManager != null) {
+                    val cb = object : AudioManager.AudioRecordingCallback() {
+                        override fun onRecordingConfigChanged(configs: List<AudioRecordingConfiguration>?) {
+                            super.onRecordingConfigChanged(configs)
+                            configs?.forEach { cfg ->
+                                val src = cfg.clientAudioSource
+                                if (src == MediaRecorder.AudioSource.VOICE_CALL ||
+                                    src == MediaRecorder.AudioSource.VOICE_COMMUNICATION) {
+                                    emitCallAnswered("AUDIO_RECORDING_CONFIG", "source_$src")
+                                }
+                            }
+                        }
+                    }
+                    audioManager.registerAudioRecordingCallback(cb, Handler(Looper.getMainLooper()))
+                    audioRecordingCallback = cb
+                    android.util.Log.d("PTA_TELEPHONY", "AudioManager AudioRecordingCallback registered")
+                }
+            }
+        } catch (e: Exception) {
+            android.util.Log.e("PTA_TELEPHONY", "Error registering AudioRecordingCallback: ${e.message}")
+        }
+    }
+
+    private fun stopCallAnswerMonitoring() {
+        isCallMonitoringActive = false
+        try {
+            recordingFileObserver?.stopWatching()
+            recordingFileObserver = null
+        } catch (_: Exception) {}
+
+        try {
+            if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.N && audioRecordingCallback != null) {
+                val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+                audioManager?.unregisterAudioRecordingCallback(audioRecordingCallback!!)
+                audioRecordingCallback = null
+            }
+        } catch (_: Exception) {}
+    }
+
+    private fun emitCallAnswered(source: String, detail: String) {
+        if (!isCallMonitoringActive) return
+        val now = System.currentTimeMillis()
+        if (now - lastEmittedActiveTimestamp < 4000) return
+        lastEmittedActiveTimestamp = now
+
+        runOnUiThread {
+            android.util.Log.d("PTA_TELEPHONY", "Call Answered detected via $source ($detail) at $now")
+            val payload = HashMap<String, Any>()
+            payload["type"] = "CALL"
+            payload["state"] = "ACTIVE"
+            payload["timestamp"] = now
+            payload["source"] = source
+            payload["incomingNumber"] = ""
+            payload["detail"] = detail
+            eventSink?.success(payload)
         }
     }
 

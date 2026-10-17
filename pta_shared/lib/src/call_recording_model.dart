@@ -20,6 +20,28 @@ class CallRecordingModel {
     this.localPath,
   });
 
+  CallRecordingModel copyWith({
+    String? filename,
+    String? filePath,
+    String? remoteNumber,
+    String? callerName,
+    int? timestamp,
+    int? sizeBytes,
+    int? durationSeconds,
+    String? localPath,
+  }) {
+    return CallRecordingModel(
+      filename: filename ?? this.filename,
+      filePath: filePath ?? this.filePath,
+      remoteNumber: remoteNumber ?? this.remoteNumber,
+      callerName: callerName ?? this.callerName,
+      timestamp: timestamp ?? this.timestamp,
+      sizeBytes: sizeBytes ?? this.sizeBytes,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      localPath: localPath ?? this.localPath,
+    );
+  }
+
   String get sizeFormatted {
     if (sizeBytes < 1024) return '$sizeBytes B';
     if (sizeBytes < 1024 * 1024) return '${(sizeBytes / 1024).toStringAsFixed(1)} KB';

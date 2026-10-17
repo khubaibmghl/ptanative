@@ -163,6 +163,10 @@ import UserNotifications
   func ensureKeepAlivePlaying() {
     do {
       let audioSession = AVAudioSession.sharedInstance()
+      if audioSession.category == .playAndRecord {
+        print("[AppDelegate] AudioSession is currently active for call (.playAndRecord). Preserving call audio.")
+        return
+      }
       try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
       try audioSession.setActive(true)
 

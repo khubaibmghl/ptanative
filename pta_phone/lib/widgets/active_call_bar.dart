@@ -27,7 +27,7 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
     super.initState();
     _syncDuration();
     _timer = Timer.periodic(const Duration(seconds: 1), (timer) {
-      if (mounted) {
+      if (mounted && widget.callInfo.state == PhoneCallState.connected) {
         setState(() {
           if (widget.callInfo.startTime > 0) {
             final now = DateTime.now().millisecondsSinceEpoch;
@@ -44,7 +44,9 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
   @override
   void didUpdateWidget(covariant ActiveCallBar oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (widget.callInfo.durationSeconds > 0 && (widget.callInfo.durationSeconds - _seconds).abs() > 3) {
+    if (widget.callInfo.state != oldWidget.callInfo.state) {
+      _syncDuration();
+    } else if (widget.callInfo.durationSeconds > 0 && (widget.callInfo.durationSeconds - _seconds).abs() > 3) {
       setState(() {
         _seconds = widget.callInfo.durationSeconds;
       });
@@ -52,11 +54,17 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
   }
 
   void _syncDuration() {
-    if (widget.callInfo.startTime > 0) {
-      final now = DateTime.now().millisecondsSinceEpoch;
-      final computed = (now - widget.callInfo.startTime) ~/ 1000;
-      _seconds = (computed >= 0 && computed < 86400) ? computed : widget.callInfo.durationSeconds;
-    } else if (widget.callInfo.durationSeconds > 0) {
+    if (widget.callInfo.state == PhoneCallState.connected) {
+      if (widget.callInfo.startTime > 0) {
+        final now = DateTime.now().millisecondsSinceEpoch;
+        final computed = (now - widget.callInfo.startTime) ~/ 1000;
+        _seconds = (computed >= 0 && computed < 86400) ? computed : widget.callInfo.durationSeconds;
+      } else if (widget.callInfo.durationSeconds > 0) {
+        _seconds = widget.callInfo.durationSeconds;
+      } else {
+        _seconds = 0;
+      }
+    } else if (widget.callInfo.state == PhoneCallState.disconnected) {
       _seconds = widget.callInfo.durationSeconds;
     } else {
       _seconds = 0;
@@ -82,6 +90,32 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
         ? widget.callInfo.callerName
         : widget.callInfo.number;
 
+    final String stateSubtitle;
+    final Color stateColor;
+    final Color iconBgColor;
+    switch (widget.callInfo.state) {
+      case PhoneCallState.connected:
+        stateSubtitle = 'PTA Cellular • ${_formatDuration(_seconds)}';
+        stateColor = LiquidGlassTheme.gsmGreen;
+        iconBgColor = LiquidGlassTheme.gsmGreen;
+        break;
+      case PhoneCallState.ringing:
+        stateSubtitle = 'PTA Cellular • Ringing...';
+        stateColor = const Color(0xFFFF9500); // iOS Orange
+        iconBgColor = const Color(0xFFFF9500);
+        break;
+      case PhoneCallState.disconnected:
+        stateSubtitle = 'PTA Cellular • Call Ended';
+        stateColor = Colors.white54;
+        iconBgColor = Colors.white24;
+        break;
+      case PhoneCallState.dialing:
+        stateSubtitle = 'PTA Cellular • Calling...';
+        stateColor = LiquidGlassTheme.iosBlue;
+        iconBgColor = LiquidGlassTheme.iosBlue;
+        break;
+    }
+
     return GlassCard(
       borderRadius: 24,
       padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
@@ -90,8 +124,8 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
         children: [
           Container(
             padding: const EdgeInsets.all(8),
-            decoration: const BoxDecoration(
-              color: LiquidGlassTheme.gsmGreen,
+            decoration: BoxDecoration(
+              color: iconBgColor,
               shape: BoxShape.circle,
             ),
             child: const Icon(Icons.phone_in_talk, color: Colors.white, size: 18),
@@ -113,9 +147,9 @@ class _ActiveCallBarState extends State<ActiveCallBar> {
                   ),
                 ),
                 Text(
-                  'Zong GSM • ${_formatDuration(_seconds)}',
-                  style: const TextStyle(
-                    color: LiquidGlassTheme.gsmGreen,
+                  stateSubtitle,
+                  style: TextStyle(
+                    color: stateColor,
                     fontSize: 12,
                     fontWeight: FontWeight.w500,
                   ),

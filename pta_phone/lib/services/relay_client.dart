@@ -10,7 +10,7 @@ import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import 'callkit_service.dart';
 
-enum PhoneCallState { dialing, ringing, connected }
+enum PhoneCallState { dialing, ringing, connected, disconnected }
 
 class ActiveCallInfo {
   final String number;
@@ -30,6 +30,26 @@ class ActiveCallInfo {
     required this.isIncoming,
     this.state = PhoneCallState.connected,
   });
+
+  ActiveCallInfo copyWith({
+    String? number,
+    String? callerName,
+    String? label,
+    int? startTime,
+    int? durationSeconds,
+    bool? isIncoming,
+    PhoneCallState? state,
+  }) {
+    return ActiveCallInfo(
+      number: number ?? this.number,
+      callerName: callerName ?? this.callerName,
+      label: label ?? this.label,
+      startTime: startTime ?? this.startTime,
+      durationSeconds: durationSeconds ?? this.durationSeconds,
+      isIncoming: isIncoming ?? this.isIncoming,
+      state: state ?? this.state,
+    );
+  }
 }
 
 /// WebSocket Client & REST Bridge connecting to Vivo S1 Host Engine
@@ -66,6 +86,8 @@ class RelayClient {
 
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
+  bool isAnsweringOrActive = false;
+  int _lastHangupTimestamp = 0;
   final List<String> diagnosticLogs = [];
   final VoiceTunnelService voiceTunnel = VoiceTunnelService();
 
@@ -641,10 +663,17 @@ class RelayClient {
                 final dur = msg.data['duration_seconds'] as int? ?? 0;
                 final startMs = DateTime.now().millisecondsSinceEpoch - (dur * 1000);
                 final contact = await DatabaseHelper.instance.findContactByNumber(number);
+                final isSameNumber = number.isEmpty ||
+                    (currentActiveCall != null &&
+                        PhoneNumberNormalizer.normalize(currentActiveCall!.number) == PhoneNumberNormalizer.normalize(number));
+                final resolvedNumber = number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call');
+                final resolvedName = contact?.displayName ?? (isSameNumber ? (currentActiveCall?.callerName ?? '') : '');
+                final resolvedLabel = contact?.getLabelForNumber(resolvedNumber) ?? (isSameNumber ? currentActiveCall?.label : null);
+
                 currentActiveCall = ActiveCallInfo(
-                  number: number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call'),
-                  callerName: contact?.displayName ?? (currentActiveCall?.callerName ?? ''),
-                  label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
+                  number: resolvedNumber,
+                  callerName: resolvedName,
+                  label: resolvedLabel,
                   startTime: startMs,
                   isIncoming: currentActiveCall?.isIncoming ?? false,
                   state: PhoneCallState.connected,
@@ -668,14 +697,20 @@ class RelayClient {
           final number = msg.data['number'] as String? ?? 'Cellular Call';
           final name = msg.data['name'] as String? ?? '';
           final label = msg.data['label'] as String?;
+          final callId = msg.data['call_id'] as String? ?? CallKitService.deterministicUuidForNumber(number);
+
+          // Resolve contact locally from SQLite cache on iPhone
+          final contact = await DatabaseHelper.instance.findContactByNumber(number);
+          final resolvedName = contact?.displayName ?? (name.isNotEmpty ? name : number);
+          final resolvedLabel = contact?.getLabelForNumber(number) ?? label;
 
           // Show native Apple CallKit Incoming Screen (Slide to Answer)
           try {
             await CallKitService.instance.showIncomingCall(
-              callId: CallKitService.generateUuid(),
-              callerName: name,
+              callId: callId,
+              callerName: resolvedName,
               handle: number,
-              label: label,
+              label: resolvedLabel,
             );
           } catch (e) {
             debugPrint('[RELAY] Exception showing CallKit incoming call: $e');
@@ -683,8 +718,8 @@ class RelayClient {
 
           currentActiveCall = ActiveCallInfo(
             number: number,
-            callerName: name,
-            label: label,
+            callerName: resolvedName,
+            label: resolvedLabel,
             startTime: 0,
             isIncoming: true,
             state: PhoneCallState.ringing,
@@ -696,9 +731,9 @@ class RelayClient {
           final dialNum = msg.data['number'] as String? ?? '';
           final dialContact = await DatabaseHelper.instance.findContactByNumber(dialNum);
           currentActiveCall = ActiveCallInfo(
-            number: dialNum.isNotEmpty ? dialNum : (currentActiveCall?.number ?? 'Cellular Call'),
-            callerName: dialContact?.displayName ?? (currentActiveCall?.callerName ?? ''),
-            label: dialContact?.getLabelForNumber(dialNum) ?? currentActiveCall?.label,
+            number: dialNum.isNotEmpty ? dialNum : 'Cellular Call',
+            callerName: dialContact?.displayName ?? '',
+            label: dialContact?.getLabelForNumber(dialNum),
             startTime: 0,
             isIncoming: false,
             state: PhoneCallState.dialing,
@@ -717,10 +752,19 @@ class RelayClient {
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           final bool wasIncomingCall = currentActiveCall?.isIncoming ?? false;
 
+          // Only inherit callerName from currentActiveCall if it belongs to the SAME call/number!
+          final isSameNumber = number.isEmpty ||
+              (currentActiveCall != null &&
+                  PhoneNumberNormalizer.normalize(currentActiveCall!.number) == PhoneNumberNormalizer.normalize(number));
+
+          final resolvedNumber = number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call');
+          final resolvedName = contact?.displayName ?? (isSameNumber ? (currentActiveCall?.callerName ?? '') : '');
+          final resolvedLabel = contact?.getLabelForNumber(resolvedNumber) ?? (isSameNumber ? currentActiveCall?.label : null);
+
           currentActiveCall = ActiveCallInfo(
-            number: number.isNotEmpty ? number : (currentActiveCall?.number ?? 'Cellular Call'),
-            callerName: contact?.displayName ?? (currentActiveCall?.callerName ?? ''),
-            label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
+            number: resolvedNumber,
+            callerName: resolvedName,
+            label: resolvedLabel,
             startTime: startTimeMs,
             durationSeconds: 0,
             isIncoming: wasIncomingCall,
@@ -729,13 +773,10 @@ class RelayClient {
           _activeCallController.add(currentActiveCall);
 
           if (isAnswered) {
-            // If incoming call was answered on Android, dismiss CallKit ringing UI immediately
-            // so iPhone stops ringing and doesn't fire 35s actionCallTimeout hangup!
-            if (wasIncomingCall) {
-              await CallKitService.instance.endAllCalls();
-            } else {
-              await CallKitService.instance.setCallConnected();
-            }
+            isAnsweringOrActive = true;
+            // Inform Apple CallKit CXProvider that the call has connected (CXCallConnected)
+            // NEVER call endAllCalls(): an answered call is live!
+            await CallKitService.instance.setCallConnected();
             logDiagnostic('🎙️ Active cellular call established -> Starting lossless WebRTC Voice Tunnel');
             voiceTunnel.startVoiceTunnel(
               isCaller: !wasIncomingCall,
@@ -762,6 +803,7 @@ class RelayClient {
           break;
 
         case 'CALL_DISCONNECTED':
+          isAnsweringOrActive = false;
           voiceTunnel.closeVoiceTunnel();
           final number = msg.data['number'] as String? ?? (currentActiveCall?.number ?? 'Unknown');
           final duration = msg.data['duration'] as int? ?? 0;
@@ -796,8 +838,28 @@ class RelayClient {
             _missedCallController.add(log);
           }
 
-          currentActiveCall = null;
-          _activeCallController.add(null);
+          if (currentActiveCall != null) {
+            currentActiveCall = ActiveCallInfo(
+              number: number,
+              callerName: contact?.displayName ?? currentActiveCall!.callerName,
+              label: contact?.getLabelForNumber(number) ?? currentActiveCall?.label,
+              startTime: currentActiveCall!.startTime,
+              durationSeconds: duration,
+              isIncoming: wasIncoming,
+              state: PhoneCallState.disconnected,
+            );
+            _activeCallController.add(currentActiveCall);
+
+            // Keep authentic iOS "call ended" on screen for 1.2s before dismissing
+            Future.delayed(const Duration(milliseconds: 1200), () {
+              if (currentActiveCall?.state == PhoneCallState.disconnected) {
+                currentActiveCall = null;
+                _activeCallController.add(null);
+              }
+            });
+          } else {
+            _activeCallController.add(null);
+          }
           break;
 
         case 'CONTACTS_LIST':
@@ -861,7 +923,8 @@ class RelayClient {
       number: clean,
       callerName: contact?.displayName ?? '',
       label: contact?.getLabelForNumber(clean),
-      startTime: now,
+      startTime: 0,
+      durationSeconds: 0,
       isIncoming: false,
       state: PhoneCallState.dialing,
     );
@@ -893,6 +956,8 @@ class RelayClient {
   }
 
   Future<bool> answerCall() async {
+    isAnsweringOrActive = true;
+    await CallKitService.instance.setCallConnected();
     if (_isConnected && _channel != null) {
       try {
         _sendRawMessage(RelayMessage.actionAnswer());
@@ -915,10 +980,30 @@ class RelayClient {
   }
 
   Future<bool> hangupCall() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if ((now - _lastHangupTimestamp) < 1200 && currentActiveCall?.state == PhoneCallState.disconnected) {
+      logDiagnostic('⚡ Debounced redundant hangup call intent');
+      return true;
+    }
+    _lastHangupTimestamp = now;
+    isAnsweringOrActive = false;
+
     voiceTunnel.closeVoiceTunnel();
     await CallKitService.instance.endAllCalls();
-    currentActiveCall = null;
-    _activeCallController.add(null);
+
+    if (currentActiveCall != null && currentActiveCall!.state != PhoneCallState.disconnected) {
+      currentActiveCall = currentActiveCall!.copyWith(
+        state: PhoneCallState.disconnected,
+      );
+      _activeCallController.add(currentActiveCall);
+
+      Future.delayed(const Duration(milliseconds: 1000), () {
+        if (currentActiveCall?.state == PhoneCallState.disconnected) {
+          currentActiveCall = null;
+          _activeCallController.add(null);
+        }
+      });
+    }
 
     if (_isConnected && _channel != null) {
       try {
@@ -1046,13 +1131,13 @@ class RelayClient {
 
   bool _isSyncingRecordings = false;
 
-  /// Permanently fetches and caches the latest 10 recordings from the Vivo S1 host
-  Future<void> syncLatestRecordings() async {
+  /// Permanently fetches and caches the latest recordings from the Vivo S1 host
+  Future<void> syncLatestRecordings({int limit = 30}) async {
     if (_isSyncingRecordings || !_isConnected) return;
     _isSyncingRecordings = true;
     try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings/latest?limit=10');
-      final res = await http.get(uri).timeout(const Duration(seconds: 5));
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings/latest?limit=$limit');
+      final res = await http.get(uri).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final List<dynamic> list = jsonDecode(res.body);
         final recordings = list.map((item) => CallRecordingModel.fromJson(Map<String, dynamic>.from(item))).toList();
@@ -1061,14 +1146,11 @@ class RelayClient {
 
         // Pre-download audio files in background so they are permanently available offline on iPhone
         for (final rec in recordings) {
-          final local = await getLocalRecordingPath(rec.filename);
-          if (local == null) {
-            downloadRecordingAudio(rec.filename).then((savedPath) {
-              if (savedPath != null) {
-                DatabaseHelper.instance.updateRecordingLocalPath(rec.filename, savedPath);
-              }
-            });
-          }
+          getLocalRecordingPath(rec.filename).then((local) {
+            if (local == null) {
+              downloadRecordingAudio(rec.filename);
+            }
+          });
         }
       }
     } catch (e) {
@@ -1079,20 +1161,52 @@ class RelayClient {
   }
 
   /// Fetches the list of recordings: checks SQLite offline cache first, then syncs with host
-  Future<List<CallRecordingModel>> fetchRecordings(String rawNumber) async {
+  Future<List<CallRecordingModel>> fetchRecordings(
+    String rawNumber, {
+    String? contactName,
+    int? callTimestamp,
+    int? durationSeconds,
+  }) async {
     // 1. Instant check from local SQLite cache
-    final localCached = await DatabaseHelper.instance.getLocalRecordings(number: rawNumber);
+    final localCached = await DatabaseHelper.instance.getLocalRecordings(
+      number: rawNumber,
+      name: contactName,
+      callTimestamp: callTimestamp,
+    );
 
     // 2. If online, fetch from host and update cache
     if (_isConnected) {
       try {
-        final uri = Uri.parse('http://$hostIp:$hostPort/api/recordings?number=${Uri.encodeComponent(rawNumber)}');
+        final queryParams = <String, String>{
+          'number': rawNumber,
+        };
+        if (contactName != null && contactName.isNotEmpty) {
+          queryParams['name'] = contactName;
+        }
+        if (callTimestamp != null && callTimestamp > 0) {
+          queryParams['timestamp'] = callTimestamp.toString();
+        }
+        if (durationSeconds != null && durationSeconds > 0) {
+          queryParams['duration'] = durationSeconds.toString();
+        }
+
+        final uri = Uri.http('$hostIp:$hostPort', 'api/recordings', queryParams);
         final res = await http.get(uri).timeout(const Duration(seconds: 4));
         if (res.statusCode == 200) {
           final List<dynamic> list = jsonDecode(res.body);
           final recordings = list.map((item) => CallRecordingModel.fromJson(Map<String, dynamic>.from(item))).toList();
           if (recordings.isNotEmpty) {
             await DatabaseHelper.instance.saveRecordings(recordings);
+
+            // Auto-download all appearing recordings so they are permanently stored on iPhone
+            for (final rec in recordings) {
+              getLocalRecordingPath(rec.filename).then((local) {
+                if (local == null) {
+                  downloadRecordingAudio(rec.filename);
+                }
+              });
+            }
+
             return recordings;
           }
         }
@@ -1128,7 +1242,7 @@ class RelayClient {
   }
 
   /// Downloads Vivo S1 call recording audio over the local network and caches it
-  /// as a native audio file on the iPhone file system.
+  /// as a permanent native audio file on the iPhone file system.
   Future<String?> downloadRecordingAudio(String filename) async {
     try {
       final dir = await getApplicationDocumentsDirectory();
@@ -1138,6 +1252,7 @@ class RelayClient {
       }
       final localFile = File('${recordingsDir.path}/$filename');
       if (await localFile.exists() && await localFile.length() > 0) {
+        await DatabaseHelper.instance.updateRecordingLocalPath(filename, localFile.path);
         return localFile.path;
       }
 
@@ -1147,6 +1262,7 @@ class RelayClient {
       if (res.statusCode == 200 && res.bodyBytes.isNotEmpty) {
         await localFile.writeAsBytes(res.bodyBytes, flush: true);
         logDiagnostic('✅ Saved recording as native iPhone file: ${localFile.path} (${res.bodyBytes.length} bytes)');
+        await DatabaseHelper.instance.updateRecordingLocalPath(filename, localFile.path);
         return localFile.path;
       } else {
         logDiagnostic('❌ Failed to download recording ($filename): status ${res.statusCode}');

@@ -498,10 +498,16 @@ class RelayServer {
     return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
   }
 
-  // 8. Latest Call Recordings (Permanent 10 sync)
+  // 8. Latest Call Recordings (Permanent sync)
   if (path == 'api/recordings/latest') {
-    final limitStr = request.url.queryParameters['limit'] ?? '10';
-    final limit = int.tryParse(limitStr) ?? 10;
+    if (cachedContacts.isEmpty && contentService != null) {
+      await contentService!.fetchContacts();
+    }
+    if (cachedCallHistory.isEmpty && contentService != null) {
+      await contentService!.fetchCallHistory();
+    }
+    final limitStr = request.url.queryParameters['limit'] ?? '25';
+    final limit = int.tryParse(limitStr) ?? 25;
     final recordings = await VivoRecordingService.instance.getLatestRecordings(
       limit: limit,
       cachedCallHistory: cachedCallHistory,
@@ -514,20 +520,40 @@ class RelayServer {
     });
   }
 
-  // 8b. Call Recordings Listing by Number
+  // 8b. Call Recordings Listing by Number / Contact / Call Timestamp
   if (path == 'api/recordings') {
+    if (cachedContacts.isEmpty && contentService != null) {
+      await contentService!.fetchContacts();
+    }
+    if (cachedCallHistory.isEmpty && contentService != null) {
+      await contentService!.fetchCallHistory();
+    }
+
     final number = request.url.queryParameters['number'] ?? '';
+    final nameParam = request.url.queryParameters['name'] ?? '';
+    final tsStr = request.url.queryParameters['timestamp'] ?? '';
+    final callTimestamp = int.tryParse(tsStr);
+    final durStr = request.url.queryParameters['duration'] ?? '';
+    final duration = int.tryParse(durStr);
+
     List<String> contactNames = [];
+    if (nameParam.isNotEmpty) {
+      contactNames.add(nameParam);
+    }
     if (number.isNotEmpty) {
       for (final c in cachedContacts) {
         if (c.matchesNumber(number)) {
-          contactNames.add(c.displayName);
+          if (!contactNames.contains(c.displayName)) {
+            contactNames.add(c.displayName);
+          }
         }
       }
     }
     final recordings = await VivoRecordingService.instance.getRecordingsForNumber(
       number,
       contactNames: contactNames,
+      callTimestamp: callTimestamp,
+      durationSeconds: duration,
       cachedCallHistory: cachedCallHistory,
       cachedContacts: cachedContacts,
     );

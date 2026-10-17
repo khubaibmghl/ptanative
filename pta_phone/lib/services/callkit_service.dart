@@ -20,7 +20,18 @@ class CallKitService {
     return '${hex.substring(0, 8)}-${hex.substring(8, 12)}-${hex.substring(12, 16)}-${hex.substring(16, 20)}-${hex.substring(20, 32)}';
   }
 
+  /// Generates a deterministic UUID based on telephone number to prevent
+  /// WebSocket vs UDP dual-presentation UUID collisions
+  static String deterministicUuidForNumber(String number) {
+    final clean = number.replaceAll(RegExp(r'\D'), '');
+    final seed = '${clean}99998888777766665555444433332222'.substring(0, 32);
+    return '${seed.substring(0, 8)}-${seed.substring(8, 12)}-4${seed.substring(13, 16)}-a${seed.substring(17, 20)}-${seed.substring(20, 32)}';
+  }
+
   String? currentCallId;
+  String? _lastRingingNumber;
+  int _lastRingingTimestamp = 0;
+  bool isProgrammaticDismiss = false;
 
   Stream<CallEvent?>? get onEvent => FlutterCallkitIncoming.onEvent;
 
@@ -31,7 +42,18 @@ class CallKitService {
     String? label,
   }) async {
     try {
-      final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
+      final now = DateTime.now().millisecondsSinceEpoch;
+      // Debounce duplicate presentation for same number within 12 seconds
+      if (_lastRingingNumber == handle && (now - _lastRingingTimestamp) < 12000 && currentCallId != null) {
+        debugPrint('[CALLKIT_DIAGNOSTIC] ⚡ Debounced duplicate incoming call presentation for $handle [Existing UUID: $currentCallId]');
+        return;
+      }
+      _lastRingingNumber = handle;
+      _lastRingingTimestamp = now;
+
+      final validUuid = callId.contains('-') && callId.length == 36
+          ? callId
+          : (handle.isNotEmpty ? deterministicUuidForNumber(handle) : generateUuid());
       currentCallId = validUuid;
       debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting showCallkitIncoming for caller "$callerName" ($handle) [UUID: $validUuid]');
       debugPrint('[CALLKIT_DIAGNOSTIC] 🎙️ CallKit iOS Audio Session settings -> Mode: voiceChat, Active: true, SampleRate: 44100Hz, BufferDuration: 0.005s');
@@ -51,6 +73,7 @@ class CallKitService {
           'number': handle,
           'name': callerName,
           'label': label,
+          'isIncoming': true,
         },
         headers: <String, dynamic>{'platform': 'flutter'},
         android: const AndroidParams(
@@ -101,7 +124,11 @@ class CallKitService {
         handle: handle,
         type: 0,
         normalHandle: 1, // Clean telephone number stored in Apple CallKit database
-        extra: <String, dynamic>{'number': handle, 'name': callerName},
+        extra: <String, dynamic>{
+          'number': handle,
+          'name': callerName,
+          'isIncoming': false,
+        },
         ios: const IOSParams(
           iconName: 'AppIcon',
           handleType: 'number', // Strictly recognized as CXHandle.HandleType.phoneNumber
@@ -135,8 +162,13 @@ class CallKitService {
   Future<void> endCall(String callId) async {
     try {
       debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending CallKit call ID: $callId');
+      isProgrammaticDismiss = true;
       if (currentCallId == callId) currentCallId = null;
+      _lastRingingNumber = null;
       await FlutterCallkitIncoming.endCall(callId);
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        isProgrammaticDismiss = false;
+      });
     } catch (e) {
       debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending call: $e');
     }
@@ -145,8 +177,13 @@ class CallKitService {
   Future<void> endAllCalls() async {
     try {
       debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending all CallKit active calls and releasing iOS AudioSession');
+      isProgrammaticDismiss = true;
       currentCallId = null;
+      _lastRingingNumber = null;
       await FlutterCallkitIncoming.endAllCalls();
+      Future.delayed(const Duration(milliseconds: 1500), () {
+        isProgrammaticDismiss = false;
+      });
     } catch (e) {
       debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending all calls: $e');
     }

@@ -86,7 +86,14 @@ class _InCallScreenState extends State<InCallScreen> {
           });
         }
       });
+    } else if (widget.callInfo.state == PhoneCallState.disconnected) {
+      // Freeze timer on disconnect
+      _timer?.cancel();
+      if (widget.callInfo.durationSeconds > 0) {
+        _elapsedSeconds = widget.callInfo.durationSeconds;
+      }
     } else {
+      // Dialing or Ringing: timer stays 0
       _elapsedSeconds = 0;
     }
   }
@@ -106,11 +113,17 @@ class _InCallScreenState extends State<InCallScreen> {
   String get _statusSubtitle {
     switch (widget.callInfo.state) {
       case PhoneCallState.dialing:
+        final rawLabel = widget.callInfo.label?.trim().toLowerCase();
+        if (rawLabel != null && rawLabel.isNotEmpty) {
+          return 'calling $rawLabel...';
+        }
         return 'calling mobile...';
       case PhoneCallState.ringing:
         return 'ringing...';
       case PhoneCallState.connected:
         return _formattedDuration;
+      case PhoneCallState.disconnected:
+        return 'call ended';
     }
   }
 
@@ -397,11 +410,14 @@ class _InCallScreenState extends State<InCallScreen> {
 
   /// The Iconic iOS 17/18 Center-Positioned Red End Call Button
   Widget _buildEndCallButton() {
+    final isEnded = widget.callInfo.state == PhoneCallState.disconnected;
     return GestureDetector(
-      onTap: () {
-        HapticFeedback.heavyImpact();
-        RelayClient.instance.hangupCall();
-      },
+      onTap: isEnded
+          ? null
+          : () {
+              HapticFeedback.heavyImpact();
+              RelayClient.instance.hangupCall();
+            },
       behavior: HitTestBehavior.opaque,
       child: Column(
         mainAxisSize: MainAxisSize.min,
@@ -409,8 +425,8 @@ class _InCallScreenState extends State<InCallScreen> {
           Container(
             width: 74,
             height: 74,
-            decoration: const BoxDecoration(
-              color: Color(0xFFFF3B30), // Apple System Red
+            decoration: BoxDecoration(
+              color: isEnded ? const Color(0x66FF3B30) : const Color(0xFFFF3B30), // Apple System Red
               shape: BoxShape.circle,
             ),
             alignment: Alignment.center,
