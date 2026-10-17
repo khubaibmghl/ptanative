@@ -559,11 +559,13 @@ import UserNotifications
     }
     NotificationCenter.default.removeObserver(self, name: .AVPlayerItemDidPlayToEndTime, object: nil)
     audioPlayer?.pause()
+    audioPlayer?.replaceCurrentItem(with: nil)
     audioPlayer = nil
     audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false])
   }
 
   @objc private func playerItemDidReachEnd(notification: Notification) {
+    stopAudio()
     audioPlayerChannel?.invokeMethod("onPlayerStateChanged", arguments: ["isPlaying": false, "completed": true])
   }
 

@@ -159,7 +159,6 @@ class TelephonyMonitor {
     } else if (state == 'IDLE') {
       _dialingFallbackTimer?.cancel();
       _dialingFallbackTimer = null;
-      _activeNumber = ''; // Guaranteed clear of active number on IDLE
       if (['ACTIVE', 'RINGING', 'DIALING'].contains(_lastPhase)) {
         _durationTicker?.cancel();
         _durationTicker = null;
@@ -172,7 +171,12 @@ class TelephonyMonitor {
               : (_talkStartTime > 0
                   ? ((now - _talkStartTime) ~/ 1000)
                   : 0);
-          final finalNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
+          final candidateNum = _activeNumber.isNotEmpty
+              ? _activeNumber
+              : (server.currentCallState['number']?.toString().isNotEmpty == true
+                  ? server.currentCallState['number'].toString()
+                  : '');
+          final finalNum = candidateNum.isNotEmpty ? candidateNum : 'Cellular Call';
           server.logEvent(
             isMissed ? 'Missed Call' : 'Call Ended',
             isMissed ? 'Rang for ${ringSec}s' : 'Duration: ${dur}s',

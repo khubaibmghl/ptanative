@@ -34,12 +34,15 @@ void main() async {
   runApp(const PtaPhoneApp());
 }
 
+final GlobalKey<NavigatorState> rootNavigatorKey = GlobalKey<NavigatorState>();
+
 class PtaPhoneApp extends StatelessWidget {
   const PtaPhoneApp({super.key});
 
   @override
   Widget build(BuildContext context) {
     return MaterialApp(
+      navigatorKey: rootNavigatorKey,
       title: 'PTA Phone',
       debugShowCheckedModeBanner: false,
       theme: LiquidGlassTheme.themeData,
@@ -60,6 +63,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   StreamSubscription<SmsMessageModel>? _smsSub;
   StreamSubscription<CallLogModel>? _missedCallSub;
   StreamSubscription<DeviceStatusModel>? _statusSub;
+  StreamSubscription<ActiveCallInfo?>? _activeCallSub;
   bool _warnedLowBattery = false;
   bool _isCallMinimized = false;
 
@@ -81,9 +85,24 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     _setupSmsListener();
     _setupMissedCallListener();
     _setupStatusListener();
+    _setupActiveCallListener();
 
     WidgetsBinding.instance.addPostFrameCallback((_) {
       _checkStartupPermissions();
+    });
+  }
+
+  void _setupActiveCallListener() {
+    _activeCallSub = RelayClient.instance.activeCallStream.listen((activeCall) {
+      if (activeCall != null &&
+          (activeCall.state == PhoneCallState.dialing ||
+           activeCall.state == PhoneCallState.ringing ||
+           activeCall.state == PhoneCallState.connected)) {
+        if (mounted) {
+          setState(() => _isCallMinimized = false);
+          rootNavigatorKey.currentState?.popUntil((route) => route.isFirst);
+        }
+      }
     });
   }
 
@@ -246,6 +265,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     _smsSub?.cancel();
     _missedCallSub?.cancel();
     _statusSub?.cancel();
+    _activeCallSub?.cancel();
     WidgetsBinding.instance.removeObserver(this);
     super.dispose();
   }

@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -29,6 +30,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   bool _isLoading = true;
   final Map<String, String> _localRecordingPaths = {};
   final Set<String> _downloadingFiles = {};
+  String? _requestedDownloadFilename;
   StreamSubscription? _syncSub;
 
   @override
@@ -48,16 +50,21 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   }
 
   Future<void> _loadHistory() async {
-    // 1. Fetch all call logs for this contact's phone numbers
-    final logs = await DatabaseHelper.instance.getCallLogsForNumbers(widget.phoneNumbers);
+    // 1. Fetch all call logs for this contact
+    final logs = await DatabaseHelper.instance.getCallLogsForContact(
+      rawNumbers: widget.phoneNumbers,
+      displayName: widget.displayName,
+    );
 
-    // 2. Fetch all recordings for this contact / numbers
-    final primaryNumber = widget.phoneNumbers.isNotEmpty ? widget.phoneNumbers.first : '';
+    // 2. Fetch all recordings for this contact / numbers strictly
     final localRecs = await DatabaseHelper.instance.getLocalRecordings(
-      number: primaryNumber,
+      numbers: widget.phoneNumbers,
       name: widget.displayName,
       limit: 50,
     );
+
+    // Sort newest to oldest
+    localRecs.sort((a, b) => b.timestamp.compareTo(a.timestamp));
 
     if (mounted) {
       setState(() {
@@ -69,7 +76,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
 
     // Resolve local disk paths for cached recordings
     for (final rec in localRecs) {
-      if (rec.localPath != null && rec.localPath!.isNotEmpty) {
+      if (rec.localPath != null && rec.localPath!.isNotEmpty && File(rec.localPath!).existsSync()) {
         _localRecordingPaths[rec.filename] = rec.localPath!;
       } else {
         RelayClient.instance.getLocalRecordingPath(rec.filename).then((path) {
@@ -81,20 +88,35 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
     }
 
     // 3. Query host in background if connected
+    final primaryNumber = widget.phoneNumbers.isNotEmpty ? widget.phoneNumbers.first : '';
     if (RelayClient.instance.isConnected && primaryNumber.isNotEmpty) {
       final remoteRecs = await RelayClient.instance.fetchRecordings(
         primaryNumber,
         contactName: widget.displayName,
       );
       if (mounted && remoteRecs.isNotEmpty) {
+        // Double filter remote recordings so ONLY this contact's recordings can ever be added
+        final filteredRemote = remoteRecs.where((r) {
+          final norm = PhoneNumberNormalizer.normalize(r.remoteNumber);
+          final numMatch = widget.phoneNumbers.any((n) {
+            final sig = PhoneNumberNormalizer.normalize(n);
+            return sig.isNotEmpty && (norm.contains(sig) || sig.contains(norm));
+          });
+          final rName = r.callerName?.toLowerCase() ?? '';
+          final nameMatch = widget.displayName.trim().isNotEmpty && rName.isNotEmpty &&
+              (rName.contains(widget.displayName.toLowerCase()) ||
+               widget.displayName.toLowerCase().contains(rName));
+          return numMatch || nameMatch;
+        }).toList();
+
         setState(() {
-          // Merge unique recordings by filename
           final filenames = _recordings.map((r) => r.filename).toSet();
-          for (final r in remoteRecs) {
+          for (final r in filteredRemote) {
             if (!filenames.contains(r.filename)) {
               _recordings.add(r);
             }
           }
+          _recordings.sort((a, b) => b.timestamp.compareTo(a.timestamp));
         });
       }
     }
@@ -103,44 +125,75 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
   CallRecordingModel? _findMatchingRecording(CallLogModel log) {
     if (_recordings.isEmpty) return null;
 
+    CallRecordingModel? bestMatch;
+    int smallestDiff = 300000; // max 5 minutes window
+
     for (final rec in _recordings) {
-      // 1. Exact or near match on timestamp (within 4 minutes)
       final diff = (rec.timestamp - log.timestamp).abs();
-      if (diff <= 240000) {
-        return rec;
-      }
-      // 2. Same duration match if within 10 minutes
-      if (log.durationSeconds > 0 && rec.durationSeconds > 0) {
-        if ((rec.durationSeconds - log.durationSeconds).abs() <= 2 && diff <= 600000) {
-          return rec;
+      if (diff < smallestDiff) {
+        if (log.durationSeconds > 0 && rec.durationSeconds > 0) {
+          if ((rec.durationSeconds - log.durationSeconds).abs() <= 5) {
+            smallestDiff = diff;
+            bestMatch = rec;
+          } else if (diff < 60000) {
+            smallestDiff = diff;
+            bestMatch = rec;
+          }
+        } else if (diff < 120000) {
+          smallestDiff = diff;
+          bestMatch = rec;
         }
       }
     }
-    return null;
+    return bestMatch;
   }
 
   Future<void> _togglePlayRecording(CallRecordingModel recording) async {
-    if (_downloadingFiles.contains(recording.filename)) return;
+    final filename = recording.filename;
+    final state = NativeAudioService.instance.currentState;
+    String? localPath = _localRecordingPaths[filename];
 
-    String? localPath = _localRecordingPaths[recording.filename];
-    if (localPath == null) {
-      setState(() => _downloadingFiles.add(recording.filename));
-      localPath = await RelayClient.instance.downloadRecordingAudio(recording.filename);
+    // If this exact recording is currently active and playing -> pause
+    if (state.activeUrl != null && state.activeUrl == localPath && state.isPlaying) {
+      await NativeAudioService.instance.pause();
+      return;
+    }
+
+    // If this exact recording is currently paused -> resume
+    if (state.activeUrl != null && state.activeUrl == localPath && !state.isPlaying) {
+      await NativeAudioService.instance.resume();
+      return;
+    }
+
+    // Otherwise, user wants to play a new clip.
+    // Stop any existing audio immediately to prevent overlap!
+    await NativeAudioService.instance.stop();
+
+    _requestedDownloadFilename = filename;
+
+    if (localPath == null || !File(localPath).existsSync()) {
+      setState(() => _downloadingFiles.add(filename));
+      localPath = await RelayClient.instance.downloadRecordingAudio(filename);
       if (mounted) {
         setState(() {
-          _downloadingFiles.remove(recording.filename);
+          _downloadingFiles.remove(filename);
           if (localPath != null) {
-            _localRecordingPaths[recording.filename] = localPath;
+            _localRecordingPaths[filename] = localPath;
           }
         });
       }
     }
 
-    if (localPath == null) {
+    // If user tapped a different clip while this was downloading, do NOT play it
+    if (_requestedDownloadFilename != filename) {
+      return;
+    }
+
+    if (localPath == null || !File(localPath).existsSync()) {
       if (mounted) {
         ScaffoldMessenger.of(context).showSnackBar(
           const SnackBar(
-            content: Text('Could not download audio from Vivo host. Check hotspot/Wi-Fi connection.'),
+            content: Text('Could not download audio from host. Check hotspot/Wi-Fi connection.'),
             backgroundColor: Color(0xFFFF3B30),
             behavior: SnackBarBehavior.floating,
           ),
@@ -149,14 +202,7 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
       return;
     }
 
-    final state = NativeAudioService.instance.currentState;
-    if (state.activeUrl == localPath && state.isPlaying) {
-      await NativeAudioService.instance.pause();
-    } else if (state.activeUrl == localPath && !state.isPlaying) {
-      await NativeAudioService.instance.resume();
-    } else {
-      await NativeAudioService.instance.play(localPath);
-    }
+    await NativeAudioService.instance.play(localPath);
   }
 
   Future<void> _shareRecording(CallRecordingModel recording) async {
@@ -434,60 +480,76 @@ class _CallHistoryScreenState extends State<CallHistoryScreen> {
                         ),
 
                       // If there are additional recordings that did not match an exact call log timestamp
-                      if (_recordings.isNotEmpty) ...[
-                        const SizedBox(height: 22),
-                        Padding(
-                          padding: const EdgeInsets.symmetric(horizontal: 4),
-                          child: Row(
+                      Builder(
+                        builder: (context) {
+                          final matchedFilenames = <String>{};
+                          for (final log in _logs) {
+                            final rec = _findMatchingRecording(log);
+                            if (rec != null) matchedFilenames.add(rec.filename);
+                          }
+                          final unmatchedRecordings = _recordings.where((r) => !matchedFilenames.contains(r.filename)).toList();
+
+                          if (unmatchedRecordings.isEmpty) return const SizedBox.shrink();
+
+                          return Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
                             children: [
-                              const Icon(Icons.mic_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
-                              const SizedBox(width: 6),
-                              Text(
-                                'VIVO S1 CALL RECORDINGS',
-                                style: TextStyle(
-                                  color: isDark ? Colors.white60 : Colors.black54,
-                                  fontSize: 12,
-                                  fontWeight: FontWeight.bold,
-                                  letterSpacing: 0.8,
+                              const SizedBox(height: 22),
+                              Padding(
+                                padding: const EdgeInsets.symmetric(horizontal: 4),
+                                child: Row(
+                                  children: [
+                                    const Icon(Icons.mic_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
+                                    const SizedBox(width: 6),
+                                    Text(
+                                      'ADDITIONAL RECORDINGS (${widget.displayName.toUpperCase()})',
+                                      style: TextStyle(
+                                        color: isDark ? Colors.white60 : Colors.black54,
+                                        fontSize: 12,
+                                        fontWeight: FontWeight.bold,
+                                        letterSpacing: 0.8,
+                                      ),
+                                    ),
+                                  ],
+                                ),
+                              ),
+                              const SizedBox(height: 8),
+                              Container(
+                                decoration: BoxDecoration(
+                                  color: isDark ? const Color(0x28554E80) : Colors.white.withValues(alpha: 0.7),
+                                  borderRadius: BorderRadius.circular(24),
+                                  border: Border.all(
+                                    color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
+                                    width: 0.8,
+                                  ),
+                                ),
+                                child: Column(
+                                  children: [
+                                    ...unmatchedRecordings.asMap().entries.map((entry) {
+                                      final idx = entry.key;
+                                      final rec = entry.value;
+
+                                      return Column(
+                                        children: [
+                                          if (idx > 0)
+                                            Divider(
+                                              color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06),
+                                              height: 1,
+                                            ),
+                                          Padding(
+                                            padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
+                                            child: _buildInlineRecordingPlayer(rec, isDark),
+                                          ),
+                                        ],
+                                      );
+                                    }),
+                                  ],
                                 ),
                               ),
                             ],
-                          ),
-                        ),
-                        const SizedBox(height: 8),
-                        Container(
-                          decoration: BoxDecoration(
-                            color: isDark ? const Color(0x28554E80) : Colors.white.withValues(alpha: 0.7),
-                            borderRadius: BorderRadius.circular(24),
-                            border: Border.all(
-                              color: isDark ? Colors.white.withValues(alpha: 0.1) : Colors.black.withValues(alpha: 0.08),
-                              width: 0.8,
-                            ),
-                          ),
-                          child: Column(
-                            children: [
-                              ..._recordings.asMap().entries.map((entry) {
-                                final idx = entry.key;
-                                final rec = entry.value;
-
-                                return Column(
-                                  children: [
-                                    if (idx > 0)
-                                      Divider(
-                                        color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.06),
-                                        height: 1,
-                                      ),
-                                    Padding(
-                                      padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 12),
-                                      child: _buildInlineRecordingPlayer(rec, isDark),
-                                    ),
-                                  ],
-                                );
-                              }),
-                            ],
-                          ),
-                        ),
-                      ],
+                          );
+                        },
+                      ),
                       const SizedBox(height: 40),
                     ],
                   ),

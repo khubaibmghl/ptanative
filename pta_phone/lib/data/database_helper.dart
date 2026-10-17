@@ -272,6 +272,50 @@ class DatabaseHelper {
       }
     }
 
+    // Deduplication check: check if an identical or near-simultaneous log exists within 30 seconds
+    final clean = log.remoteNumber.trim();
+    final norm = PhoneNumberNormalizer.normalize(clean);
+    final sig = norm.length >= 7 ? norm.substring(norm.length - 7) : norm;
+
+    final windowStart = log.timestamp - 30000;
+    final windowEnd = log.timestamp + 30000;
+
+    final existing = await db.query(
+      'call_logs',
+      where: 'timestamp BETWEEN ? AND ?',
+      whereArgs: [windowStart, windowEnd],
+    );
+
+    for (final row in existing) {
+      final rowNum = (row['remote_number'] as String? ?? '').trim();
+      final rowNorm = PhoneNumberNormalizer.normalize(rowNum);
+      final rowSig = rowNorm.length >= 7 ? rowNorm.substring(rowNorm.length - 7) : rowNorm;
+      final rowName = (row['caller_name'] as String? ?? '').trim();
+
+      final bool numberMatch = (sig.isNotEmpty && rowSig.isNotEmpty && sig == rowSig) ||
+          (clean.isNotEmpty && rowNum.isNotEmpty && clean == rowNum);
+      final bool nameMatch = nameToStore.isNotEmpty &&
+          rowName.isNotEmpty &&
+          nameToStore.toLowerCase() == rowName.toLowerCase();
+
+      if (numberMatch || nameMatch) {
+        final existingDuration = row['duration_seconds'] as int? ?? 0;
+        final newDuration = log.durationSeconds > existingDuration ? log.durationSeconds : existingDuration;
+        await db.update(
+          'call_logs',
+          {
+            'remote_number': (clean.isNotEmpty && clean != 'Cellular Call') ? clean : rowNum,
+            'caller_name': nameToStore.isNotEmpty ? nameToStore : rowName,
+            'duration_seconds': newDuration,
+            'call_type': log.callType.name,
+          },
+          where: 'id = ?',
+          whereArgs: [row['id']],
+        );
+        return; // Successfully merged into existing call log!
+      }
+    }
+
     await db.insert(
       'call_logs',
       {
@@ -288,7 +332,66 @@ class DatabaseHelper {
     );
   }
 
+  Future<void> cleanDuplicateCallLogs() async {
+    try {
+      final db = await database;
+      final rows = await db.query('call_logs', orderBy: 'timestamp DESC');
+      if (rows.length < 2) return;
+
+      final idsToDelete = <int>{};
+      for (int i = 0; i < rows.length; i++) {
+        final rowI = rows[i];
+        final idI = rowI['id'] as int;
+        if (idsToDelete.contains(idI)) continue;
+
+        final timeI = rowI['timestamp'] as int? ?? 0;
+        final numI = rowI['remote_number']?.toString().trim() ?? '';
+        final nameI = rowI['caller_name']?.toString().trim() ?? '';
+        final durI = rowI['duration_seconds'] as int? ?? 0;
+
+        for (int j = i + 1; j < rows.length; j++) {
+          final rowJ = rows[j];
+          final idJ = rowJ['id'] as int;
+          if (idsToDelete.contains(idJ)) continue;
+
+          final timeJ = rowJ['timestamp'] as int? ?? 0;
+          final diff = (timeI - timeJ).abs();
+          // Since sorted timestamp DESC, once diff > 120s, subsequent rows are even further
+          if (diff > 120000) break;
+
+          final numJ = rowJ['remote_number']?.toString().trim() ?? '';
+          final nameJ = rowJ['caller_name']?.toString().trim() ?? '';
+          final durJ = rowJ['duration_seconds'] as int? ?? 0;
+
+          final bool numMatch = numI.isNotEmpty && numJ.isNotEmpty &&
+              (numI == numJ || PhoneNumberNormalizer.areMatching(numI, numJ));
+          final bool nameMatch = nameI.isNotEmpty && nameJ.isNotEmpty &&
+              nameI.toLowerCase() == nameJ.toLowerCase();
+
+          if (numMatch || nameMatch) {
+            // Clustered duplicate detected within 2 minutes!
+            if (durI == 0 && durJ == 0) {
+              idsToDelete.add(idJ);
+            } else if (durI > 0 && durJ == 0) {
+              idsToDelete.add(idJ);
+            } else if (durI == 0 && durJ > 0) {
+              idsToDelete.add(idI);
+              break;
+            } else if (durI == durJ) {
+              idsToDelete.add(idJ);
+            }
+          }
+        }
+      }
+
+      for (final id in idsToDelete) {
+        await db.delete('call_logs', where: 'id = ?', whereArgs: [id]);
+      }
+    } catch (_) {}
+  }
+
   Future<List<CallLogModel>> getCallLogs({bool missedOnly = false}) async {
+    await cleanDuplicateCallLogs();
     final db = await database;
     final List<Map<String, dynamic>> rows;
 
@@ -343,6 +446,35 @@ class DatabaseHelper {
       final logNorm = PhoneNumberNormalizer.normalize(log.remoteNumber);
       final logRaw = log.remoteNumber.replaceAll(RegExp(r'\s+'), '');
       return normalizedSet.contains(logNorm) || rawSet.contains(logRaw);
+    }).toList();
+  }
+
+  Future<List<CallLogModel>> getCallLogsForContact({
+    required List<String> rawNumbers,
+    required String displayName,
+  }) async {
+    final allLogs = await getCallLogs();
+    final normalizedSet = rawNumbers
+        .map((n) => PhoneNumberNormalizer.normalize(n))
+        .where((n) => n.isNotEmpty)
+        .toSet();
+    final rawSet = rawNumbers
+        .map((n) => n.replaceAll(RegExp(r'\s+'), ''))
+        .where((n) => n.isNotEmpty)
+        .toSet();
+    final cleanName = displayName.trim().toLowerCase();
+
+    return allLogs.where((log) {
+      final logNorm = PhoneNumberNormalizer.normalize(log.remoteNumber);
+      final logRaw = log.remoteNumber.replaceAll(RegExp(r'\s+'), '');
+      final logName = log.callerName.trim().toLowerCase();
+
+      final numMatch = normalizedSet.contains(logNorm) || rawSet.contains(logRaw);
+      final nameMatch = cleanName.isNotEmpty &&
+          cleanName != 'cellular call' &&
+          (logName == cleanName || (logName.isNotEmpty && logName.contains(cleanName)));
+
+      return numMatch || nameMatch;
     }).toList();
   }
 
@@ -493,9 +625,10 @@ class DatabaseHelper {
 
   Future<List<CallRecordingModel>> getLocalRecordings({
     String? number,
+    List<String>? numbers,
     String? name,
     int? callTimestamp,
-    int limit = 20,
+    int limit = 50,
   }) async {
     final db = await database;
     Directory? docDir;
@@ -503,32 +636,61 @@ class DatabaseHelper {
       docDir = await getApplicationDocumentsDirectory();
     } catch (_) {}
 
-    List<Map<String, dynamic>> maps;
+    // Collect all candidate numbers
+    final candidateNumbers = <String>[];
+    if (numbers != null) {
+      candidateNumbers.addAll(numbers);
+    }
+    if (number != null && number.trim().isNotEmpty) {
+      candidateNumbers.add(number.trim());
+    }
+
+    // Extract significant phone signatures (minimum 6 digits to avoid greedy matches)
+    final sigs = <String>[];
+    for (final numStr in candidateNumbers) {
+      final norm = PhoneNumberNormalizer.normalize(numStr);
+      if (norm.length >= 6) {
+        sigs.add(norm.length >= 7 ? norm.substring(norm.length - 7) : norm);
+      }
+    }
+
+    final trimmedName = name?.trim() ?? '';
+    final hasValidName = trimmedName.length >= 3 && !trimmedName.toLowerCase().contains('cellular call');
+
+    // If caller specifically asked for a contact's recordings, but neither valid numbers nor valid name exists:
+    // DO NOT return all recordings! Return empty list!
+    final bool filteringRequested = candidateNumbers.isNotEmpty || (name != null && name.trim().isNotEmpty);
+    if (filteringRequested && sigs.isEmpty && !hasValidName) {
+      return [];
+    }
 
     final whereClauses = <String>[];
     final whereArgs = <dynamic>[];
 
-    if (number != null && number.trim().isNotEmpty) {
-      final clean = number.trim();
-      final norm = PhoneNumberNormalizer.normalize(clean);
-      final sig = norm.length >= 7 ? norm.substring(norm.length - 7) : norm;
-
-      if (name != null && name.trim().isNotEmpty && name.trim() != number.trim()) {
-        whereClauses.add('(remote_number LIKE ? OR caller_name LIKE ?)');
-        whereArgs.add('%$sig%');
-        whereArgs.add('%${name.trim()}%');
-      } else {
-        whereClauses.add('remote_number LIKE ?');
-        whereArgs.add('%$sig%');
+    if (sigs.isNotEmpty && hasValidName) {
+      final orParts = <String>[];
+      for (final s in sigs) {
+        orParts.add('remote_number LIKE ?');
+        whereArgs.add('%$s%');
       }
-    } else if (name != null && name.trim().isNotEmpty) {
+      orParts.add('caller_name LIKE ?');
+      whereArgs.add('%$trimmedName%');
+      whereClauses.add('(${orParts.join(' OR ')})');
+    } else if (sigs.isNotEmpty) {
+      final orParts = <String>[];
+      for (final s in sigs) {
+        orParts.add('remote_number LIKE ?');
+        whereArgs.add('%$s%');
+      }
+      whereClauses.add('(${orParts.join(' OR ')})');
+    } else if (hasValidName) {
       whereClauses.add('caller_name LIKE ?');
-      whereArgs.add('%${name.trim()}%');
+      whereArgs.add('%$trimmedName%');
     }
 
     final whereString = whereClauses.isNotEmpty ? whereClauses.join(' AND ') : null;
 
-    maps = await db.query(
+    final maps = await db.query(
       'call_recordings',
       where: whereString,
       whereArgs: whereArgs.isNotEmpty ? whereArgs : null,
@@ -536,16 +698,34 @@ class DatabaseHelper {
       limit: limit,
     );
 
-    final results = maps.map((m) {
+    final results = <CallRecordingModel>[];
+    for (final m in maps) {
       final rec = CallRecordingModel.fromJson(m);
+      if (filteringRequested) {
+        // Double check in Dart: must match either one of sigs OR the name
+        final recNum = rec.remoteNumber.trim();
+        final recNorm = PhoneNumberNormalizer.normalize(recNum);
+        final bool numMatch = sigs.any((s) => recNorm.contains(s));
+        final recName = rec.callerName?.toLowerCase() ?? '';
+        final bool nameMatch = hasValidName && recName.isNotEmpty &&
+            (recName.contains(trimmedName.toLowerCase()) ||
+             trimmedName.toLowerCase().contains(recName));
+
+        if (!numMatch && !nameMatch) {
+          // Reject foreign contact!
+          continue;
+        }
+      }
+
       if ((rec.localPath == null || rec.localPath!.isEmpty) && docDir != null) {
         final candidate = File('${docDir.path}/recordings/${rec.filename}');
         if (candidate.existsSync() && candidate.lengthSync() > 0) {
-          return rec.copyWith(localPath: candidate.path);
+          results.add(rec.copyWith(localPath: candidate.path));
+          continue;
         }
       }
-      return rec;
-    }).toList();
+      results.add(rec);
+    }
 
     if (callTimestamp != null && callTimestamp > 0 && results.isNotEmpty) {
       results.sort((a, b) {

@@ -75,7 +75,10 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
 
     List<CallLogModel> logs = [];
     if (numberStrings.isNotEmpty) {
-      logs = await DatabaseHelper.instance.getCallLogsForNumbers(numberStrings);
+      logs = await DatabaseHelper.instance.getCallLogsForContact(
+        rawNumbers: numberStrings,
+        displayName: _displayName,
+      );
     }
 
     // If empty but initialLog was passed, use initialLog
@@ -142,7 +145,9 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
   void _callPrimaryNumber() {
     if (_phoneNumbers.isNotEmpty) {
       HapticFeedback.lightImpact();
-      RelayClient.instance.dialNumber(_phoneNumbers.first.rawNumber);
+      final num = _phoneNumbers.first.rawNumber;
+      Navigator.of(context).popUntil((route) => route.isFirst);
+      RelayClient.instance.dialNumber(num);
     }
   }
 
@@ -596,7 +601,9 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
                                         ),
                                         onPressed: () {
                                           HapticFeedback.lightImpact();
-                                          RelayClient.instance.dialNumber(phone.rawNumber);
+                                          final num = phone.rawNumber;
+                                          Navigator.of(context).popUntil((route) => route.isFirst);
+                                          RelayClient.instance.dialNumber(num);
                                         },
                                       ),
                                     ],
