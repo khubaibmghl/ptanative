@@ -7,7 +7,7 @@ import Network
 import UserNotifications
 
 @main
-@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate {
+@objc class AppDelegate: FlutterAppDelegate, FlutterImplicitEngineDelegate, AVAudioPlayerDelegate {
   static weak var shared: AppDelegate?
 
   private var nativeChannel: FlutterMethodChannel?
@@ -109,6 +109,12 @@ import UserNotifications
     )
     NotificationCenter.default.addObserver(
       self,
+      selector: #selector(handleAudioRouteChange(_:)),
+      name: AVAudioSession.routeChangeNotification,
+      object: nil
+    )
+    NotificationCenter.default.addObserver(
+      self,
       selector: #selector(handleMediaServicesReset(_:)),
       name: AVAudioSession.mediaServicesWereResetNotification,
       object: nil
@@ -137,6 +143,11 @@ import UserNotifications
     ensureKeepAlivePlaying()
   }
 
+  @objc private func handleAudioRouteChange(_ notification: Notification) {
+    print("[AppDelegate] Audio route changed (AirPods/Bluetooth/Lock). Ensuring keep-alive...")
+    ensureKeepAlivePlaying()
+  }
+
   @objc private func handleAudioInterruption(_ notification: Notification) {
     guard let userInfo = notification.userInfo,
           let typeValue = userInfo[AVAudioSessionInterruptionTypeKey] as? UInt,
@@ -160,6 +171,21 @@ import UserNotifications
     print("[AppDelegate] Media Services Were Lost...")
   }
 
+  func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
+    if player == silentAudioPlayer {
+      print("[AppDelegate] Silent keep-alive player finished. Looping...")
+      silentAudioPlayer?.play()
+    }
+  }
+
+  func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
+    if player == silentAudioPlayer {
+      print("[AppDelegate] Silent keep-alive player decode error: \(String(describing: error)). Recreating...")
+      silentAudioPlayer = nil
+      ensureKeepAlivePlaying()
+    }
+  }
+
   func ensureKeepAlivePlaying() {
     do {
       let audioSession = AVAudioSession.sharedInstance()
@@ -167,12 +193,13 @@ import UserNotifications
         print("[AppDelegate] AudioSession is currently active for call (.playAndRecord). Preserving call audio.")
         return
       }
-      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
       try audioSession.setActive(true)
 
       if silentAudioPlayer == nil {
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
+        silentAudioPlayer?.delegate = self
         silentAudioPlayer?.numberOfLoops = -1
         silentAudioPlayer?.volume = 0.05
       }

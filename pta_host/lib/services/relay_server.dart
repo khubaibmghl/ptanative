@@ -77,44 +77,58 @@ class RelayServer {
     if (_server != null) return true;
 
     try {
-      final wsHandler = webSocketHandler((WebSocketChannel socket, String? protocol) {
-        _connectedSockets.add(socket);
-        _lastDisconnectTime = 0;
-        logEvent('Client Connected', 'iPhone paired via WebSocket', ActivityType.success);
+      final innerWs = webSocketHandler(
+        (WebSocketChannel socket, String? protocol) {
+          _connectedSockets.add(socket);
+          _lastDisconnectTime = 0;
+          logEvent('Client Connected', 'iPhone paired via WebSocket', ActivityType.success);
 
-        // Send initial state & device status
-        socket.sink.add(jsonEncode({
-          'type': 'SYNC_STATE',
-          'data': currentCallState,
-        }));
+          // Send initial state & device status
+          socket.sink.add(jsonEncode({
+            'type': 'SYNC_STATE',
+            'data': currentCallState,
+          }));
+          try {
+            telemetryService?.updateAndBroadcast(force: true);
+          } catch (_) {}
+
+          socket.stream.listen(
+            (message) {
+              final raw = message.toString();
+              try {
+                final msg = RelayMessage.fromJsonString(raw);
+                if (msg.type == 'PING') {
+                  socket.sink.add(RelayMessage.pong().toJsonString());
+                  return;
+                }
+              } catch (_) {}
+              _handleIncomingSocketMessage(raw);
+            },
+            onDone: () {
+              _connectedSockets.remove(socket);
+              _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
+              logEvent('Client Disconnected', 'iPhone socket closed', ActivityType.info);
+            },
+            onError: (err) {
+              _connectedSockets.remove(socket);
+              _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
+              logEvent('Socket Error', err.toString(), ActivityType.error);
+            },
+          );
+        },
+        pingInterval: const Duration(seconds: 15),
+      );
+
+      FutureOr<Response> wsHandler(Request request) {
         try {
-          telemetryService?.updateAndBroadcast(force: true);
+          final info = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+          final remote = info?.remoteAddress;
+          if (remote != null && !remote.isLoopback) {
+            _lastKnownClientAddress = remote;
+          }
         } catch (_) {}
-
-        socket.stream.listen(
-          (message) {
-            final raw = message.toString();
-            try {
-              final msg = RelayMessage.fromJsonString(raw);
-              if (msg.type == 'PING') {
-                socket.sink.add(RelayMessage.pong().toJsonString());
-                return;
-              }
-            } catch (_) {}
-            _handleIncomingSocketMessage(raw);
-          },
-          onDone: () {
-            _connectedSockets.remove(socket);
-            _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
-            logEvent('Client Disconnected', 'iPhone socket closed', ActivityType.info);
-          },
-          onError: (err) {
-            _connectedSockets.remove(socket);
-            _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
-            logEvent('Socket Error', err.toString(), ActivityType.error);
-          },
-        );
-      });
+        return innerWs(request);
+      }
 
       final cascade = Cascade().add(wsHandler).add(_handleRestApi);
 
@@ -416,6 +430,14 @@ class RelayServer {
   }
 
   Future<Response> _handleRestApi(Request request) async {
+    try {
+      final info = request.context['shelf.io.connection_info'] as HttpConnectionInfo?;
+      final remote = info?.remoteAddress;
+      if (remote != null && !remote.isLoopback) {
+        _lastKnownClientAddress = remote;
+      }
+    } catch (_) {}
+
     final path = request.url.path;
 
     // 1. Status

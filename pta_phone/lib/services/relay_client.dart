@@ -195,13 +195,16 @@ class RelayClient {
 
   /// Fast parallel HTTP sweep across a /24 subnet (e.g. 192.168.1.1 .. 254)
   Future<String?> sweepSubnet(String prefix) async {
+    if (_isConnected) return null;
     logDiagnostic('⚡ Starting parallel subnet sweep on $prefix.0/24...');
     final client = http.Client();
     try {
       final futures = <Future<String?>>[];
       for (int i = 1; i <= 254; i++) {
+        if (_isConnected) break;
         final ip = '$prefix.$i';
         futures.add(() async {
+          if (_isConnected) return null;
           try {
             final uri = Uri.parse('http://$ip:$hostPort/api/status');
             final res = await client.get(uri).timeout(const Duration(milliseconds: 350));
@@ -227,6 +230,7 @@ class RelayClient {
 
   /// Instant check of the local Hotspot / Wi-Fi router gateway
   Future<String?> probeDirectGateway() async {
+    if (_isConnected) return hostIp;
     try {
       // 1. Auto-detect if connected to Vivo S1 Hotspot (192.168.43.x)
       try {
@@ -256,6 +260,7 @@ class RelayClient {
       } catch (_) {}
 
       for (final ip in candidateIps) {
+        if (_isConnected) return hostIp;
         try {
           final uri = Uri.parse('http://$ip:$hostPort/api/status');
           final res = await http.get(uri).timeout(const Duration(milliseconds: 400));
@@ -271,6 +276,8 @@ class RelayClient {
 
   /// High-Speed Multi-Layer Auto-Discovery (Hotspot Auto-Lock -> UDP Broadcast -> Subnet Sweep)
   Future<String?> discoverHostIp() async {
+    if (_isConnected) return hostIp;
+
     // 1. Check Hotspot / Gateway direct probe (0 ms for Hotspot)
     final directIp = await probeDirectGateway();
     if (directIp != null && directIp.isNotEmpty) {
@@ -279,6 +286,8 @@ class RelayClient {
       await prefs.setString('host_ip', hostIp);
       return directIp;
     }
+
+    if (_isConnected) return hostIp;
 
     // 2. High-speed parallel UDP Broadcast Probe (10-20ms)
     try {
@@ -542,9 +551,16 @@ class RelayClient {
     logDiagnostic('App Resumed from screen lock/background');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
     if (!_isConnected || _channel == null) {
-      logDiagnostic('Instant wake reconnect starting...');
-      discoverHostIp().then((_) {
-        connect();
+      logDiagnostic('Instant wake reconnecting directly to host $hostIp...');
+      connect();
+      Future.delayed(const Duration(milliseconds: 2000), () {
+        if (!_isConnected) {
+          discoverHostIp().then((discovered) {
+            if (!_isConnected && discovered != null && discovered.isNotEmpty) {
+              connect();
+            }
+          });
+        }
       });
     } else {
       try {
@@ -564,21 +580,31 @@ class RelayClient {
 
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 2), (timer) async {
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       if (_isConnected) {
         logDiagnostic('✅ Devices connected: stopping background search.');
         timer.cancel();
         _reconnectTimer = null;
         return;
       }
-      logDiagnostic('⚡ Superfast background search running for Vivo S1...');
+      if (hostIp.isNotEmpty) {
+        connect();
+        if (_isConnected) {
+          timer.cancel();
+          _reconnectTimer = null;
+          return;
+        }
+      }
+      logDiagnostic('⚡ Background search running for Vivo S1...');
       final discoveredIp = await discoverHostIp();
       if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
         hostIp = discoveredIp;
         final prefs = await SharedPreferences.getInstance();
         await prefs.setString('host_ip', hostIp);
       }
-      connect();
+      if (!_isConnected) {
+        connect();
+      }
     });
   }
 
@@ -1095,10 +1121,16 @@ class RelayClient {
     return 'http://$hostIp:$hostPort/api/contacts/avatar?id=${Uri.encodeComponent(contactId)}';
   }
 
+  int _lastRecordingsSyncTimestamp = 0;
+
   Future<void> syncAll() async {
     await fetchContacts();
     await fetchHistory();
-    await syncLatestRecordings();
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastRecordingsSyncTimestamp > 180000) {
+      _lastRecordingsSyncTimestamp = now;
+      await syncLatestRecordings(limit: 20);
+    }
   }
 
   Future<void> fetchContacts() async {
@@ -1132,7 +1164,7 @@ class RelayClient {
   bool _isSyncingRecordings = false;
 
   /// Permanently fetches and caches the latest recordings from the Vivo S1 host
-  Future<void> syncLatestRecordings({int limit = 30}) async {
+  Future<void> syncLatestRecordings({int limit = 20}) async {
     if (_isSyncingRecordings || !_isConnected) return;
     _isSyncingRecordings = true;
     try {
@@ -1144,13 +1176,13 @@ class RelayClient {
         logDiagnostic('📥 Synced ${recordings.length} latest recordings from Vivo S1 host');
         await DatabaseHelper.instance.saveRecordings(recordings);
 
-        // Pre-download audio files in background so they are permanently available offline on iPhone
-        for (final rec in recordings) {
-          getLocalRecordingPath(rec.filename).then((local) {
-            if (local == null) {
-              downloadRecordingAudio(rec.filename);
-            }
-          });
+        // Pre-download top 3 newest missing recordings sequentially in background
+        final topRecent = recordings.take(3).toList();
+        for (final rec in topRecent) {
+          final local = await getLocalRecordingPath(rec.filename);
+          if (local == null && _isConnected) {
+            await downloadRecordingAudio(rec.filename);
+          }
         }
       }
     } catch (e) {

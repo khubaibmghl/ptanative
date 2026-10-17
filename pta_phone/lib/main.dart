@@ -254,7 +254,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   void didChangeAppLifecycleState(AppLifecycleState state) {
     if (state == AppLifecycleState.resumed) {
       RelayClient.instance.onAppResumed();
-    } else if (state == AppLifecycleState.paused || state == AppLifecycleState.inactive) {
+    } else if (state == AppLifecycleState.paused) {
       RelayClient.instance.onAppPaused();
     }
   }
