@@ -215,6 +215,120 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     }
   }
 
+  void _pasteFromClipboard() async {
+    final data = await Clipboard.getData(Clipboard.kTextPlain);
+    final text = data?.text?.trim() ?? '';
+    if (text.isEmpty) {
+      if (mounted) {
+        ScaffoldMessenger.of(context).showSnackBar(
+          const SnackBar(
+            content: Text('Clipboard is empty'),
+            behavior: SnackBarBehavior.floating,
+            duration: Duration(seconds: 1),
+          ),
+        );
+      }
+      return;
+    }
+
+    // Strip protocols and paths: ws://, wss://, http://, https://, trailing /ws, etc.
+    var clean = text
+        .replaceAll('ws://', '')
+        .replaceAll('wss://', '')
+        .replaceAll('http://', '')
+        .replaceAll('https://', '');
+    if (clean.contains('/')) {
+      clean = clean.split('/').first;
+    }
+
+    String ip = clean.trim();
+    int? port;
+    if (clean.contains(':')) {
+      final parts = clean.split(':');
+      ip = parts[0].trim();
+      port = int.tryParse(parts[1].trim());
+    }
+
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _ipController.text = ip;
+      if (port != null && port > 0) {
+        _portController.text = port.toString();
+      }
+    });
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.paste_rounded, color: LiquidGlassTheme.iosBlue, size: 20),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text('Pasted Host: $ip${port != null ? ":$port" : ""}'),
+              ),
+            ],
+          ),
+          backgroundColor: LiquidGlassTheme.surfaceDark,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+          duration: const Duration(seconds: 2),
+        ),
+      );
+    }
+  }
+
+  void _saveCurrentAsProfile() async {
+    final ip = _ipController.text.trim();
+    final port = int.tryParse(_portController.text.trim()) ?? 8080;
+    if (ip.isEmpty) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please enter a valid IP address first'),
+          behavior: SnackBarBehavior.floating,
+        ),
+      );
+      return;
+    }
+
+    final exists = RelayClient.instance.savedConnections.any((c) => c.ip == ip && c.port == port);
+    if (exists) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text('$ip:$port is already saved in your profiles'),
+          backgroundColor: LiquidGlassTheme.surfaceDark,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
+      return;
+    }
+
+    HapticFeedback.mediumImpact();
+    final defaultName = ip == '192.168.43.1'
+        ? 'Vivo S1 Hotspot'
+        : (ip == '127.0.0.1' ? 'ADB Loopback' : 'Host ($ip)');
+
+    await RelayClient.instance.addSavedConnection(defaultName, ip, port);
+    if (mounted) {
+      setState(() {});
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              const Icon(Icons.bookmark_added_rounded, color: LiquidGlassTheme.gsmGreen, size: 20),
+              const SizedBox(width: 8),
+              Text('Saved "$defaultName" to profiles!'),
+            ],
+          ),
+          backgroundColor: LiquidGlassTheme.surfaceDark,
+          behavior: SnackBarBehavior.floating,
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
+    }
+  }
+
   void _forceSync() async {
     HapticFeedback.selectionClick();
     setState(() => _isSyncing = true);
@@ -513,33 +627,36 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
           return ListView(
             padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 120),
             children: [
-              // 1. Smart Local Network & Subnet Environment Banner
-              _buildSmartNetworkBanner(isDark),
-              const SizedBox(height: 14),
-
-              // 2. Connection Hero & Mesh State
-              _buildConnectionHeroCard(isConnected, isDark),
-              const SizedBox(height: 16),
-
-              // 3. High-Tech Automated Auto-Discovery Action Card
-              _buildAutomatedDiscoveryCard(isConnected, isDark),
-              const SizedBox(height: 22),
-
-              // 4. Vivo S1 Hardware Telemetry Pro Dashboard
-              _buildSectionHeader('VIVO S1 ENGINE TELEMETRY', icon: Icons.speed_rounded),
-              const SizedBox(height: 8),
-              _buildTelemetryDashboard(status, isConnected, isDark),
-              const SizedBox(height: 22),
-
-              // 5. iOS System & Background Keep-Alive Engine Status
-              _buildSectionHeader('IOS SYSTEM & BACKGROUND RESILIENCE', icon: Icons.shield_rounded),
-              const SizedBox(height: 8),
-              _buildBackgroundResilienceCard(isDark),
-              const SizedBox(height: 22),
-
-              // 6. Saved Host Connections (1-Tap Switcher)
+              // 1. Direct Wi-Fi / Hotspot IP Configuration (AT THE VERY TOP)
               _buildSectionHeader(
-                'SAVED HOST CONNECTIONS',
+                'HOST ADDRESS CONFIGURATION',
+                icon: Icons.router_rounded,
+                trailing: TextButton.icon(
+                  style: TextButton.styleFrom(
+                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                    visualDensity: VisualDensity.compact,
+                    backgroundColor: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                  ),
+                  icon: const Icon(Icons.paste_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
+                  label: const Text(
+                    'Paste IP',
+                    style: TextStyle(
+                      color: LiquidGlassTheme.iosBlue,
+                      fontWeight: FontWeight.bold,
+                      fontSize: 12,
+                    ),
+                  ),
+                  onPressed: _pasteFromClipboard,
+                ),
+              ),
+              const SizedBox(height: 8),
+              _buildDirectConfigCard(isConnected, isDark),
+              const SizedBox(height: 20),
+
+              // 2. Saved Host Connections (RIGHT AFTER ADDRESS ENTERING)
+              _buildSectionHeader(
+                'SAVED HOST PROFILES',
                 icon: Icons.alt_route_rounded,
                 trailing: TextButton.icon(
                   style: TextButton.styleFrom(
@@ -564,10 +681,28 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               _buildSavedConnectionsList(isConnected, isDark),
               const SizedBox(height: 22),
 
-              // 7. Direct Wi-Fi / Hotspot IP Configuration
-              _buildSectionHeader('DIRECT NETWORK CONFIGURATION', icon: Icons.tune_rounded),
+              // 3. Smart Local Network & Subnet Environment Banner
+              _buildSmartNetworkBanner(isDark),
+              const SizedBox(height: 14),
+
+              // 4. Automated Auto-Discovery Action Card
+              _buildAutomatedDiscoveryCard(isConnected, isDark),
+              const SizedBox(height: 20),
+
+              // 5. Connection Hero & Mesh State
+              _buildConnectionHeroCard(isConnected, isDark),
+              const SizedBox(height: 22),
+
+              // 6. Vivo S1 Hardware Telemetry Pro Dashboard
+              _buildSectionHeader('VIVO S1 ENGINE TELEMETRY', icon: Icons.speed_rounded),
               const SizedBox(height: 8),
-              _buildDirectConfigCard(isDark),
+              _buildTelemetryDashboard(status, isConnected, isDark),
+              const SizedBox(height: 22),
+
+              // 7. iOS System & Background Keep-Alive Engine Status
+              _buildSectionHeader('IOS SYSTEM & BACKGROUND RESILIENCE', icon: Icons.shield_rounded),
+              const SizedBox(height: 8),
+              _buildBackgroundResilienceCard(isDark),
               const SizedBox(height: 22),
 
               // 8. Remote Cloud Relay (WAN Tunnel)
@@ -582,7 +717,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               _buildDiagnosticsCard(isDark),
               const SizedBox(height: 24),
 
-              // 8. Architecture & Engine About Footer
+              // 10. Architecture & Engine About Footer
               _buildArchitectureFooter(isDark),
               const SizedBox(height: 16),
             ],
@@ -1330,9 +1465,38 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 5. Saved Host Connections (1-Tap Switcher)
+  /// 2. Saved Host Connections (1-Tap Profile Switcher)
   Widget _buildSavedConnectionsList(bool isConnected, bool isDark) {
     final connections = RelayClient.instance.savedConnections;
+
+    if (connections.isEmpty) {
+      return GlassCard(
+        borderRadius: 22,
+        padding: const EdgeInsets.all(20),
+        child: Center(
+          child: Column(
+            children: [
+              Icon(Icons.alt_route_rounded, size: 32, color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5)),
+              const SizedBox(height: 8),
+              Text(
+                'No Saved Host Profiles',
+                style: TextStyle(
+                  color: isDark ? Colors.white70 : Colors.black87,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 14,
+                ),
+              ),
+              const SizedBox(height: 4),
+              Text(
+                'Tap "Save as Profile" in the card above or "+ Add New" to bookmark addresses.',
+                style: TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 12),
+                textAlign: TextAlign.center,
+              ),
+            ],
+          ),
+        ),
+      );
+    }
 
     return GlassCard(
       borderRadius: 22,
@@ -1342,7 +1506,8 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
           ...connections.asMap().entries.map((entry) {
             final idx = entry.key;
             final conn = entry.value;
-            final isActive = RelayClient.instance.hostIp == conn.ip;
+            final isActive = RelayClient.instance.hostIp == conn.ip &&
+                RelayClient.instance.hostPort == conn.port;
 
             return Column(
               children: [
@@ -1354,24 +1519,43 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                   ),
                 InkWell(
                   onTap: () => _switchTo(conn),
-                  child: Padding(
+                  borderRadius: BorderRadius.vertical(
+                    top: idx == 0 ? const Radius.circular(22) : Radius.zero,
+                    bottom: idx == connections.length - 1 ? const Radius.circular(22) : Radius.zero,
+                  ),
+                  child: Container(
+                    decoration: BoxDecoration(
+                      color: isActive
+                          ? (isConnected
+                              ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.07)
+                              : LiquidGlassTheme.iosBlue.withValues(alpha: 0.06))
+                          : Colors.transparent,
+                    ),
                     padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                     child: Row(
                       children: [
-                        // Connection Icon Squircle
+                        // Connection Icon Squircle with soft glow
                         Container(
-                          width: 38,
-                          height: 38,
+                          width: 40,
+                          height: 40,
                           decoration: BoxDecoration(
                             color: isActive
                                 ? (isConnected
                                     ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.2)
-                                    : LiquidGlassTheme.iosBlue.withValues(alpha: 0.15))
+                                    : LiquidGlassTheme.iosBlue.withValues(alpha: 0.16))
                                 : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
                             borderRadius: BorderRadius.circular(12),
+                            border: Border.all(
+                              color: isActive
+                                  ? (isConnected
+                                      ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4)
+                                      : LiquidGlassTheme.iosBlue.withValues(alpha: 0.35))
+                                  : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06)),
+                              width: 1,
+                            ),
                           ),
                           child: Icon(
-                            conn.isDefaultHotspot ? Icons.wifi_tethering_rounded : Icons.wifi_rounded,
+                            conn.isDefaultHotspot ? Icons.wifi_tethering_rounded : Icons.router_rounded,
                             color: isActive
                                 ? (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue)
                                 : LiquidGlassTheme.textSecondary,
@@ -1392,7 +1576,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                                       style: TextStyle(
                                         color: isDark ? Colors.white : Colors.black87,
                                         fontWeight: isActive ? FontWeight.bold : FontWeight.w600,
-                                        fontSize: 15,
+                                        fontSize: 14,
                                       ),
                                       overflow: TextOverflow.ellipsis,
                                     ),
@@ -1424,6 +1608,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                                   color: LiquidGlassTheme.textSecondary,
                                   fontSize: 12,
                                   fontFamily: 'monospace',
+                                  fontWeight: FontWeight.w500,
                                 ),
                               ),
                             ],
@@ -1435,8 +1620,8 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                             padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
                             decoration: BoxDecoration(
                               color: isConnected
-                                  ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.2)
-                                  : Colors.orange.withValues(alpha: 0.2),
+                                  ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.16)
+                                  : Colors.orange.withValues(alpha: 0.16),
                               borderRadius: BorderRadius.circular(10),
                               border: Border.all(
                                 color: isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange,
@@ -1504,23 +1689,368 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 5. Direct Wi-Fi / Hotspot IP Configuration (With 1-Tap Quick Network Chips)
-  Widget _buildDirectConfigCard(bool isDark) {
+  /// 1. Direct Wi-Fi / Hotspot IP Configuration (High-Tech Futuristic Glass Pod)
+  Widget _buildDirectConfigCard(bool isConnected, bool isDark) {
+    final effectiveHostIp = _ipController.text.trim().isNotEmpty ? _ipController.text.trim() : '192.168.43.1';
+    final effectivePort = _portController.text.trim().isNotEmpty ? _portController.text.trim() : '8080';
+    final endpointUrl = 'ws://$effectiveHostIp:$effectivePort/ws';
+
     return GlassCard(
-      borderRadius: 22,
-      padding: const EdgeInsets.all(16),
+      borderRadius: 24,
+      padding: const EdgeInsets.all(18),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: [
-          // Automated Quick Presets Row
-          Text(
-            'QUICK PRESETS (1-TAP AUTOFILL)',
-            style: TextStyle(
-              color: LiquidGlassTheme.textSecondary,
-              fontSize: 10,
-              fontWeight: FontWeight.bold,
-              letterSpacing: 0.8,
+          // Top Cyber Header with Live Link Status
+          Row(
+            children: [
+              Container(
+                width: 38,
+                height: 38,
+                decoration: BoxDecoration(
+                  gradient: LinearGradient(
+                    colors: isConnected
+                        ? [LiquidGlassTheme.gsmGreen.withValues(alpha: 0.25), LiquidGlassTheme.gsmGreen.withValues(alpha: 0.1)]
+                        : [LiquidGlassTheme.iosBlue.withValues(alpha: 0.25), LiquidGlassTheme.iosBlue.withValues(alpha: 0.1)],
+                    begin: Alignment.topLeft,
+                    end: Alignment.bottomRight,
+                  ),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: isConnected
+                        ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4)
+                        : LiquidGlassTheme.iosBlue.withValues(alpha: 0.3),
+                    width: 1,
+                  ),
+                ),
+                child: Icon(
+                  Icons.router_rounded,
+                  size: 20,
+                  color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Row(
+                      children: [
+                        Text(
+                          'HOST RELAY BRIDGE',
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black87,
+                            fontSize: 14,
+                            fontWeight: FontWeight.w800,
+                            letterSpacing: 0.6,
+                          ),
+                        ),
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: (isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange)
+                                .withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: (isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange)
+                                  .withValues(alpha: 0.3),
+                              width: 0.8,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Container(
+                                width: 6,
+                                height: 6,
+                                decoration: BoxDecoration(
+                                  color: isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange,
+                                  shape: BoxShape.circle,
+                                ),
+                              ),
+                              const SizedBox(width: 4),
+                              Text(
+                                isConnected ? 'ONLINE' : 'STANDBY',
+                                style: TextStyle(
+                                  color: isConnected ? LiquidGlassTheme.gsmGreen : Colors.orange,
+                                  fontSize: 9,
+                                  fontWeight: FontWeight.w800,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                      ],
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      'Direct WebSocket pipe for VoLTE audio & GSM signaling',
+                      style: TextStyle(
+                        color: LiquidGlassTheme.textSecondary,
+                        fontSize: 11,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              // Latency or Reconnect Trigger
+              if (isConnected)
+                InkWell(
+                  borderRadius: BorderRadius.circular(8),
+                  onTap: _isPinging ? null : _testPing,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                    decoration: BoxDecoration(
+                      color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.12),
+                      borderRadius: BorderRadius.circular(8),
+                      border: Border.all(
+                        color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.3),
+                        width: 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        if (_isPinging)
+                          const SizedBox(
+                            width: 10,
+                            height: 10,
+                            child: CircularProgressIndicator(strokeWidth: 1.5, color: LiquidGlassTheme.gsmGreen),
+                          )
+                        else
+                          const Icon(Icons.bolt_rounded, size: 12, color: LiquidGlassTheme.gsmGreen),
+                        const SizedBox(width: 3),
+                        Text(
+                          _pingLatency >= 0
+                              ? '${_pingLatency}ms'
+                              : (RelayClient.instance.lastPingLatencyMs > 0
+                                  ? '${RelayClient.instance.lastPingLatencyMs}ms'
+                                  : 'Ping'),
+                          style: const TextStyle(
+                            fontSize: 11,
+                            fontWeight: FontWeight.bold,
+                            color: LiquidGlassTheme.gsmGreen,
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
+            ],
+          ),
+          const SizedBox(height: 16),
+
+          // High-Tech Monospace Endpoint Bar with 1-Tap Copy
+          Container(
+            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 7),
+            decoration: BoxDecoration(
+              color: isDark ? Colors.black.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.5),
+              borderRadius: BorderRadius.circular(10),
+              border: Border.all(
+                color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06),
+                width: 0.8,
+              ),
             ),
+            child: Row(
+              children: [
+                Icon(Icons.terminal_rounded, size: 14, color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue),
+                const SizedBox(width: 8),
+                Expanded(
+                  child: Text(
+                    endpointUrl,
+                    style: TextStyle(
+                      fontFamily: 'monospace',
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      color: isDark ? Colors.white70 : Colors.black87,
+                    ),
+                    overflow: TextOverflow.ellipsis,
+                  ),
+                ),
+                InkWell(
+                  onTap: () {
+                    HapticFeedback.selectionClick();
+                    Clipboard.setData(ClipboardData(text: endpointUrl));
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(
+                        content: Text('Endpoint URL copied to clipboard'),
+                        behavior: SnackBarBehavior.floating,
+                        duration: Duration(seconds: 1),
+                      ),
+                    );
+                  },
+                  child: Padding(
+                    padding: const EdgeInsets.all(2.0),
+                    child: Icon(Icons.copy_rounded, size: 14, color: LiquidGlassTheme.textSecondary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // IP Address Input Pod
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                width: 1,
+              ),
+            ),
+            child: TextField(
+              controller: _ipController,
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontFamily: 'monospace',
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+              keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                labelText: 'Vivo Host IP Address',
+                hintText: '192.168.43.1',
+                labelStyle: TextStyle(
+                  color: LiquidGlassTheme.textSecondary,
+                  fontSize: 12,
+                ),
+                prefixIcon: const Icon(Icons.lan_rounded, color: LiquidGlassTheme.iosBlue, size: 20),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    // Quick Paste Chip
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: _pasteFromClipboard,
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.25),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.content_paste_rounded, size: 12, color: LiquidGlassTheme.iosBlue),
+                            SizedBox(width: 4),
+                            Text(
+                              'PASTE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: LiquidGlassTheme.iosBlue,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
+                    if (_ipController.text.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 18),
+                        onPressed: () => setState(() => _ipController.clear()),
+                      ),
+                  ],
+                ),
+                border: InputBorder.none,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(height: 10),
+
+          // Port Input Pod
+          Container(
+            decoration: BoxDecoration(
+              color: isDark ? Colors.black.withValues(alpha: 0.3) : Colors.white.withValues(alpha: 0.65),
+              borderRadius: BorderRadius.circular(14),
+              border: Border.all(
+                color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                width: 1,
+              ),
+            ),
+            child: TextField(
+              controller: _portController,
+              keyboardType: TextInputType.number,
+              style: TextStyle(
+                color: isDark ? Colors.white : Colors.black87,
+                fontFamily: 'monospace',
+                fontSize: 15,
+                fontWeight: FontWeight.w600,
+              ),
+              decoration: InputDecoration(
+                contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                labelText: 'Relay Port',
+                hintText: '8080',
+                labelStyle: TextStyle(
+                  color: LiquidGlassTheme.textSecondary,
+                  fontSize: 12,
+                ),
+                prefixIcon: const Icon(Icons.numbers_rounded, color: LiquidGlassTheme.iosBlue, size: 20),
+                suffixIcon: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: [
+                    if (_portController.text.trim() != '8080')
+                      InkWell(
+                        borderRadius: BorderRadius.circular(8),
+                        onTap: () {
+                          HapticFeedback.selectionClick();
+                          setState(() => _portController.text = '8080');
+                        },
+                        child: Container(
+                          margin: const EdgeInsets.only(right: 6),
+                          padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                          decoration: BoxDecoration(
+                            color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
+                            borderRadius: BorderRadius.circular(8),
+                          ),
+                          child: const Text(
+                            'Default: 8080',
+                            style: TextStyle(
+                              fontSize: 10,
+                              fontWeight: FontWeight.bold,
+                              color: LiquidGlassTheme.iosBlue,
+                            ),
+                          ),
+                        ),
+                      ),
+                    if (_portController.text.isNotEmpty)
+                      IconButton(
+                        icon: const Icon(Icons.clear_rounded, size: 18),
+                        onPressed: () => setState(() => _portController.clear()),
+                      ),
+                  ],
+                ),
+                border: InputBorder.none,
+              ),
+              onChanged: (_) => setState(() {}),
+            ),
+          ),
+          const SizedBox(height: 14),
+
+          // Quick Presets Row
+          Row(
+            children: [
+              Icon(Icons.bolt_rounded, size: 13, color: LiquidGlassTheme.textSecondary),
+              const SizedBox(width: 4),
+              Text(
+                'QUICK PRESETS',
+                style: TextStyle(
+                  color: LiquidGlassTheme.textSecondary,
+                  fontSize: 10,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: 0.8,
+                ),
+              ),
+            ],
           ),
           const SizedBox(height: 8),
           Wrap(
@@ -1530,62 +2060,78 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               _buildPresetChip('📱 Vivo Hotspot (192.168.43.1)', '192.168.43.1', 8080, isDark),
               _buildPresetChip('🏠 Home Wi-Fi (192.168.23.68)', '192.168.23.68', 8080, isDark),
               _buildPresetChip('💻 ADB Loopback (127.0.0.1)', '127.0.0.1', 8080, isDark),
+              // Radar Auto-Discover Quick Chip
+              InkWell(
+                borderRadius: BorderRadius.circular(10),
+                onTap: _isDiscovering ? null : _autoDiscover,
+                child: Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                  decoration: BoxDecoration(
+                    color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.14),
+                    borderRadius: BorderRadius.circular(10),
+                    border: Border.all(
+                      color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.35),
+                      width: 1,
+                    ),
+                  ),
+                  child: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      if (_isDiscovering)
+                        const SizedBox(
+                          width: 12,
+                          height: 12,
+                          child: CircularProgressIndicator(strokeWidth: 1.5, color: LiquidGlassTheme.iosBlue),
+                        )
+                      else
+                        const Icon(Icons.radar_rounded, size: 13, color: LiquidGlassTheme.iosBlue),
+                      const SizedBox(width: 5),
+                      const Text(
+                        '⚡ Auto-Discover',
+                        style: TextStyle(
+                          color: LiquidGlassTheme.iosBlue,
+                          fontSize: 11,
+                          fontWeight: FontWeight.bold,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+              ),
             ],
           ),
-          const SizedBox(height: 14),
+          const SizedBox(height: 16),
 
-          // IP Field
-          TextField(
-            controller: _ipController,
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-            decoration: InputDecoration(
-              labelText: 'Vivo Host IP Address',
-              hintText: '192.168.43.1',
-              labelStyle: TextStyle(color: LiquidGlassTheme.textSecondary),
-              prefixIcon: const Icon(Icons.router_rounded, color: LiquidGlassTheme.iosBlue),
-              suffixIcon: _ipController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded, size: 18),
-                      onPressed: () => setState(() => _ipController.clear()),
-                    )
-                  : null,
-              border: InputBorder.none,
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 1),
-
-          // Port Field
-          TextField(
-            controller: _portController,
-            keyboardType: TextInputType.number,
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-            decoration: InputDecoration(
-              labelText: 'Host Port (Default 8080)',
-              labelStyle: TextStyle(color: LiquidGlassTheme.textSecondary),
-              prefixIcon: const Icon(Icons.dns_rounded, color: LiquidGlassTheme.iosBlue),
-              suffixIcon: _portController.text.isNotEmpty
-                  ? IconButton(
-                      icon: const Icon(Icons.clear_rounded, size: 18),
-                      onPressed: () => setState(() => _portController.clear()),
-                    )
-                  : null,
-              border: InputBorder.none,
-            ),
-            onChanged: (_) => setState(() {}),
-          ),
-          const SizedBox(height: 14),
-
-          // Save & Connect Action Button
-          SizedBox(
+          // Main High-Tech Gradient Action Button
+          Container(
             width: double.infinity,
+            height: 50,
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                colors: isConnected
+                    ? const [Color(0xFF34C759), Color(0xFF248A3D)]
+                    : (_isSaving
+                        ? const [Color(0xFF007AFF), Color(0xFF5856D6)]
+                        : const [Color(0xFF007AFF), Color(0xFF0051C7)]),
+                begin: Alignment.topLeft,
+                end: Alignment.bottomRight,
+              ),
+              borderRadius: BorderRadius.circular(14),
+              boxShadow: [
+                BoxShadow(
+                  color: (isConnected ? const Color(0xFF34C759) : const Color(0xFF007AFF))
+                      .withValues(alpha: 0.35),
+                  blurRadius: 14,
+                  offset: const Offset(0, 4),
+                ),
+              ],
+            ),
             child: ElevatedButton.icon(
               style: ElevatedButton.styleFrom(
-                backgroundColor: LiquidGlassTheme.gsmGreen,
-                foregroundColor: Colors.white,
+                backgroundColor: Colors.transparent,
+                shadowColor: Colors.transparent,
                 shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
-                padding: const EdgeInsets.symmetric(vertical: 14),
-                elevation: 0,
+                padding: const EdgeInsets.symmetric(vertical: 12),
               ),
               icon: _isSaving
                   ? const SizedBox(
@@ -1593,13 +2139,79 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                       height: 18,
                       child: CircularProgressIndicator(strokeWidth: 2, color: Colors.white),
                     )
-                  : const Icon(Icons.check_circle_outline_rounded, size: 20),
+                  : Icon(
+                      isConnected ? Icons.check_circle_rounded : Icons.bolt_rounded,
+                      size: 20,
+                      color: Colors.white,
+                    ),
               label: Text(
-                _isSaving ? 'Connecting to Host...' : 'Save & Connect Now',
-                style: const TextStyle(fontWeight: FontWeight.bold, fontSize: 15),
+                _isSaving
+                    ? 'CONNECTING TO VIVO S1...'
+                    : (isConnected ? 'CONNECTED • RE-SYNC NOW' : 'CONNECT TO HOST NOW'),
+                style: const TextStyle(
+                  fontWeight: FontWeight.w800,
+                  fontSize: 15,
+                  letterSpacing: 0.5,
+                  color: Colors.white,
+                ),
               ),
               onPressed: _isSaving ? null : _saveHostConfig,
             ),
+          ),
+          const SizedBox(height: 10),
+
+          // Secondary Quick Actions Row: Save as Profile & Disconnect
+          Row(
+            children: [
+              Expanded(
+                child: OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: isDark ? Colors.white12 : Colors.black12,
+                      width: 0.8,
+                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(vertical: 10),
+                  ),
+                  icon: const Icon(Icons.bookmark_add_outlined, size: 16, color: LiquidGlassTheme.iosBlue),
+                  label: const Text(
+                    'Save as Profile',
+                    style: TextStyle(
+                      color: LiquidGlassTheme.iosBlue,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  onPressed: _saveCurrentAsProfile,
+                ),
+              ),
+              if (isConnected) ...[
+                const SizedBox(width: 10),
+                OutlinedButton.icon(
+                  style: OutlinedButton.styleFrom(
+                    side: BorderSide(
+                      color: LiquidGlassTheme.crimsonRed.withValues(alpha: 0.3),
+                      width: 0.8,
+                    ),
+                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 10),
+                  ),
+                  icon: const Icon(Icons.power_settings_new_rounded, size: 16, color: LiquidGlassTheme.crimsonRed),
+                  label: const Text(
+                    'Disconnect',
+                    style: TextStyle(
+                      color: LiquidGlassTheme.crimsonRed,
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                  onPressed: () {
+                    HapticFeedback.mediumImpact();
+                    RelayClient.instance.disconnect();
+                  },
+                ),
+              ],
+            ],
           ),
         ],
       ),
