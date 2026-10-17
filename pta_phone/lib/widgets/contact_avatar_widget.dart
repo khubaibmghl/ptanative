@@ -45,15 +45,12 @@ class ContactAvatarWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final hasId = contactId != null && contactId!.isNotEmpty;
-    final avatarUrl = hasId ? RelayClient.instance.getContactAvatarUrl(contactId!) : null;
-
     final defaultBg = backgroundColor ?? const Color(0xFF7A8DBE);
     final defaultText = textColor ?? Colors.white;
     final initials = _initials;
     final isUnsavedNumber = initials.isEmpty;
 
-    Widget fallbackMonogram = Container(
+    final Widget fallbackMonogram = Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
@@ -75,14 +72,21 @@ class ContactAvatarWidget extends StatelessWidget {
             ),
     );
 
-    if (avatarUrl == null) {
+    final isOnline = RelayClient.instance.isConnected;
+    final hasId = contactId != null && contactId!.isNotEmpty;
+
+    // In offline state or when no contact ID is present, render the offline initials monogram immediately (0ms)
+    if (!isOnline || !hasId) {
       return fallbackMonogram;
     }
+
+    final avatarUrl = RelayClient.instance.getContactAvatarUrl(contactId!);
 
     return Container(
       width: size,
       height: size,
       decoration: BoxDecoration(
+        color: defaultBg,
         shape: BoxShape.circle,
         border: border,
       ),
@@ -92,11 +96,13 @@ class ContactAvatarWidget extends StatelessWidget {
           width: size,
           height: size,
           fit: BoxFit.cover,
-          errorBuilder: (context, error, stackTrace) => fallbackMonogram,
-          loadingBuilder: (context, child, loadingProgress) {
-            if (loadingProgress == null) return child;
+          frameBuilder: (context, child, frame, wasSynchronouslyLoaded) {
+            if (wasSynchronouslyLoaded || frame != null) {
+              return child;
+            }
             return fallbackMonogram;
           },
+          errorBuilder: (context, error, stackTrace) => fallbackMonogram,
         ),
       ),
     );
