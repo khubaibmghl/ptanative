@@ -2,6 +2,7 @@ import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
+import 'package:flutter/services.dart';
 import 'package:http/http.dart' as http;
 import 'package:path_provider/path_provider.dart';
 import 'package:shared_preferences/shared_preferences.dart';
@@ -520,22 +521,24 @@ class RelayClient {
 
   void _startPingHeartbeat() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 16), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 20), (_) {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
-        // Avoid aggressive disconnect if app is in background/screen locked where iOS coalesces timers
-        if (elapsedSincePong > 60000 && !isAppPaused) {
-          logDiagnostic('Ping watchdog timeout (>60s no response). Disconnecting to trigger instant reconnect.');
+        // In background/screen locked, allow up to 180s before watchdog teardown to prevent false disconnects
+        final maxWatchdogTimeout = isAppPaused ? 180000 : 60000;
+        if (elapsedSincePong > maxWatchdogTimeout) {
+          logDiagnostic('Ping watchdog timeout (>${maxWatchdogTimeout ~/ 1000}s no response). Disconnecting to trigger instant reconnect.');
           disconnect();
           connect();
           return;
         }
-        // Only send PING if no packets were received from the host in the last 15 seconds
+        // Send PING if no packets were received from the host in the last 15 seconds
         if (now - _lastPongTime >= 15000) {
           try {
             _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
             _channel!.sink.add(RelayMessage.ping().toJsonString());
+            _pingNativeKeepAlive();
           } catch (e) {
             logDiagnostic('Ping Send Error: $e');
             _onDisconnected();
@@ -546,10 +549,17 @@ class RelayClient {
     });
   }
 
+  void _pingNativeKeepAlive() {
+    try {
+      const MethodChannel('com.pta.phone/native_intents').invokeMethod('pingKeepAlive');
+    } catch (_) {}
+  }
+
   void onAppResumed() {
     isAppPaused = false;
     logDiagnostic('App Resumed from screen lock/background');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+    _pingNativeKeepAlive();
     if (!_isConnected || _channel == null) {
       logDiagnostic('Instant wake reconnecting directly to host $hostIp...');
       connect();
@@ -574,8 +584,9 @@ class RelayClient {
 
   void onAppPaused() {
     isAppPaused = true;
-    logDiagnostic('App entered background/screen locked');
+    logDiagnostic('App entered background/screen locked (2-Hour Keep-Alive Active)');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+    _pingNativeKeepAlive();
   }
 
   void _startReconnectLoop() {
@@ -637,6 +648,7 @@ class RelayClient {
 
       // Any valid message received from host confirms link liveness
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+      _pingNativeKeepAlive();
 
       if (msg.type != 'PONG') {
         logDiagnostic('RX [${msg.type}]: ${msg.toJsonString()}');
@@ -1126,6 +1138,7 @@ class RelayClient {
   Future<void> syncAll() async {
     await fetchContacts();
     await fetchHistory();
+    await fetchMessages();
     final now = DateTime.now().millisecondsSinceEpoch;
     if (now - _lastRecordingsSyncTimestamp > 180000) {
       _lastRecordingsSyncTimestamp = now;
@@ -1156,6 +1169,19 @@ class RelayClient {
           final log = CallLogModel.fromJson(Map<String, dynamic>.from(item));
           await DatabaseHelper.instance.saveCallLog(log);
         }
+        _syncController.add(null);
+      }
+    } catch (_) {}
+  }
+
+  Future<void> fetchMessages({int limit = 500}) async {
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/messages?limit=$limit');
+      final res = await http.get(uri).timeout(const Duration(seconds: 4));
+      if (res.statusCode == 200) {
+        final List<dynamic> list = jsonDecode(res.body);
+        final messages = list.map((item) => SmsMessageModel.fromJson(Map<String, dynamic>.from(item))).toList();
+        await DatabaseHelper.instance.saveMessages(messages);
         _syncController.add(null);
       }
     } catch (_) {}

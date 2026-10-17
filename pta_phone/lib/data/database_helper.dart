@@ -328,6 +328,24 @@ class DatabaseHelper {
     }).toList();
   }
 
+  Future<List<CallLogModel>> getCallLogsForNumbers(List<String> rawNumbers) async {
+    final allLogs = await getCallLogs();
+    final normalizedSet = rawNumbers
+        .map((n) => PhoneNumberNormalizer.normalize(n))
+        .where((n) => n.isNotEmpty)
+        .toSet();
+    final rawSet = rawNumbers
+        .map((n) => n.replaceAll(RegExp(r'\s+'), ''))
+        .where((n) => n.isNotEmpty)
+        .toSet();
+
+    return allLogs.where((log) {
+      final logNorm = PhoneNumberNormalizer.normalize(log.remoteNumber);
+      final logRaw = log.remoteNumber.replaceAll(RegExp(r'\s+'), '');
+      return normalizedSet.contains(logNorm) || rawSet.contains(logRaw);
+    }).toList();
+  }
+
   // --- Messages & OTP CRUD ---
 
   Future<void> saveMessage(SmsMessageModel message) async {
@@ -344,6 +362,27 @@ class DatabaseHelper {
       },
       conflictAlgorithm: ConflictAlgorithm.replace,
     );
+  }
+
+  Future<void> saveMessages(List<SmsMessageModel> messages) async {
+    if (messages.isEmpty) return;
+    final db = await database;
+    final batch = db.batch();
+    for (final message in messages) {
+      batch.insert(
+        'messages',
+        {
+          'id': message.id,
+          'sender': message.sender,
+          'body': message.body,
+          'extracted_otp': message.extractedOtp,
+          'timestamp': message.timestamp,
+          'is_read': message.isRead ? 1 : 0,
+        },
+        conflictAlgorithm: ConflictAlgorithm.replace,
+      );
+    }
+    await batch.commit(noResult: true);
   }
 
   Future<List<SmsMessageModel>> getMessages({int limit = 500}) async {

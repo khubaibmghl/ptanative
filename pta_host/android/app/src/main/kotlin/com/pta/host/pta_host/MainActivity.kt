@@ -89,6 +89,11 @@ class MainActivity : FlutterActivity() {
                     val digit = call.argument<String>("digit") ?: ""
                     result.success(sendDtmfNative(digit))
                 }
+                "getAllSms" -> {
+                    val limit = call.argument<Int>("limit") ?: 500
+                    val list = getAllSmsNative(limit)
+                    result.success(list)
+                }
                 else -> result.notImplemented()
             }
         }
@@ -471,4 +476,43 @@ class MainActivity : FlutterActivity() {
         // Can be routed through InCallService / TelecomManager if active
         return true
     }
+
+    private fun getAllSmsNative(limit: Int): List<Map<String, Any>> {
+        val result = ArrayList<Map<String, Any>>()
+        try {
+            val uri = Uri.parse("content://sms")
+            val projection = arrayOf("_id", "address", "body", "date", "type", "read")
+            val cursor = contentResolver.query(uri, projection, null, null, "date DESC LIMIT $limit")
+            cursor?.use {
+                val idCol = it.getColumnIndex("_id")
+                val addressCol = it.getColumnIndex("address")
+                val bodyCol = it.getColumnIndex("body")
+                val dateCol = it.getColumnIndex("date")
+                val typeCol = it.getColumnIndex("type")
+                val readCol = it.getColumnIndex("read")
+
+                while (it.moveToNext()) {
+                    val id = if (idCol >= 0) it.getLong(idCol) else 0L
+                    val address = if (addressCol >= 0) it.getString(addressCol) ?: "" else ""
+                    val body = if (bodyCol >= 0) it.getString(bodyCol) ?: "" else ""
+                    val date = if (dateCol >= 0) it.getLong(dateCol) else 0L
+                    val type = if (typeCol >= 0) it.getInt(typeCol) else 1
+                    val read = if (readCol >= 0) it.getInt(readCol) == 1 else true
+
+                    val item = HashMap<String, Any>()
+                    item["id"] = id
+                    // Outgoing message (type 2) marked with "To: " so iOS matches cleanly
+                    item["sender"] = if (type == 2) "To: $address" else address
+                    item["body"] = body
+                    item["timestamp"] = date
+                    item["isRead"] = read
+                    result.add(item)
+                }
+            }
+        } catch (e: Exception) {
+            e.printStackTrace()
+        }
+        return result
+    }
 }
+

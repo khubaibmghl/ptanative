@@ -116,7 +116,7 @@ class RelayServer {
             },
           );
         },
-        pingInterval: const Duration(seconds: 15),
+        pingInterval: const Duration(seconds: 45),
       );
 
       FutureOr<Response> wsHandler(Request request) {
@@ -619,7 +619,18 @@ class RelayServer {
     );
   }
 
-  // 10. Outgoing SMS Dispatch via REST
+  // 10. All SMS Messages Sync
+  if (path == 'api/messages' || path == 'api/sms') {
+    final limitStr = request.url.queryParameters['limit'] ?? '500';
+    final limit = int.tryParse(limitStr) ?? 500;
+    final list = await telephonyController.getAllSms(limit: limit);
+    return Response.ok(
+      jsonEncode(list),
+      headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+    );
+  }
+
+  // 11. Outgoing SMS Dispatch via REST
   if (path == 'api/sms/send') {
     try {
       final bodyStr = await request.readAsString();

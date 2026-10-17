@@ -171,6 +171,19 @@ class TelephonyController {
     return false;
   }
 
+  /// Retrieves all SMS messages from Android content provider
+  Future<List<Map<String, dynamic>>> getAllSms({int limit = 500}) async {
+    try {
+      final list = await _channel.invokeMethod<List<dynamic>>('getAllSms', {'limit': limit});
+      if (list != null) {
+        return list.map((item) => Map<String, dynamic>.from(item as Map)).toList();
+      }
+    } catch (e) {
+      debugPrint('[TELEPHONY] getAllSms error: $e');
+    }
+    return [];
+  }
+
   /// Checks if Android Wi-Fi AP / Hotspot is active
   Future<bool> isHotspotActive() async {
     try {

@@ -7,6 +7,7 @@ import '../services/relay_client.dart';
 import '../services/native_audio_service.dart';
 import '../theme/liquid_glass_theme.dart';
 import '../widgets/contact_avatar_widget.dart';
+import 'contact_detail_screen.dart';
 
 class RecentsScreen extends StatefulWidget {
   const RecentsScreen({super.key});
@@ -205,7 +206,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
     return InkWell(
       onTap: () {
         HapticFeedback.lightImpact();
-        RelayClient.instance.dialNumber(log.remoteNumber);
+        _showCallDetailsSheet(context, log);
       },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
@@ -337,19 +338,19 @@ class _RecentsScreenState extends State<RecentsScreen> {
             ),
             const SizedBox(width: 8),
 
-            // Native iOS (i) Info Button
+            // Native iOS Call Action Button at the most right side
             GestureDetector(
               onTap: () {
-                HapticFeedback.lightImpact();
-                _showCallDetailsSheet(context, log);
+                HapticFeedback.mediumImpact();
+                RelayClient.instance.dialNumber(log.remoteNumber);
               },
               behavior: HitTestBehavior.opaque,
-              child: Padding(
-                padding: const EdgeInsets.all(4),
+              child: const Padding(
+                padding: EdgeInsets.all(6),
                 child: Icon(
-                  Icons.info_outline_rounded,
-                  color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.85),
-                  size: 22,
+                  Icons.phone_rounded,
+                  color: LiquidGlassTheme.gsmGreen,
+                  size: 20,
                 ),
               ),
             ),
@@ -360,11 +361,14 @@ class _RecentsScreenState extends State<RecentsScreen> {
   }
 
   void _showCallDetailsSheet(BuildContext context, CallLogModel log) {
-    showModalBottomSheet(
-      context: context,
-      isScrollControlled: true,
-      backgroundColor: Colors.transparent,
-      builder: (ctx) => CallDetailsSheet(log: log),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => ContactDetailScreen(
+          initialLog: log,
+          rawNumber: log.remoteNumber,
+          displayName: log.callerName.isNotEmpty ? log.callerName : log.remoteNumber,
+        ),
+      ),
     );
   }
 

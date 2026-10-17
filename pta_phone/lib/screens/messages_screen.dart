@@ -165,296 +165,399 @@ class _MessagesScreenState extends State<MessagesScreen> {
 
     return Scaffold(
       backgroundColor: Colors.transparent,
-      appBar: AppBar(
-        title: const Text('Messages'),
-        actions: [
-          IconButton(
-            icon: Container(
-              padding: const EdgeInsets.all(7),
-              decoration: BoxDecoration(
-                color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
-                shape: BoxShape.circle,
-              ),
-              child: const Icon(Icons.edit_square, color: LiquidGlassTheme.iosBlue, size: 18),
-            ),
-            tooltip: 'Compose SMS via Vivo SIM',
-            onPressed: () => _openComposeSheet(),
-          ),
-          const SizedBox(width: 8),
-        ],
-      ),
-      floatingActionButton: Padding(
-        padding: const EdgeInsets.only(bottom: 70),
-        child: FloatingActionButton.extended(
-          backgroundColor: LiquidGlassTheme.iosBlue,
-          foregroundColor: Colors.white,
-          elevation: 4,
-          icon: const Icon(Icons.edit_note_rounded, size: 22),
-          label: const Text(
-            'Compose SMS',
-            style: TextStyle(fontWeight: FontWeight.w600, letterSpacing: -0.2),
-          ),
-          onPressed: () => _openComposeSheet(),
-        ),
-      ),
-      body: _isLoading
-          ? const Center(child: CircularProgressIndicator())
-          : Column(
-              children: [
-                // Search Bar
-                Padding(
-                  padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-                  child: Container(
-                    decoration: BoxDecoration(
-                      color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
-                      borderRadius: BorderRadius.circular(14),
-                    ),
-                    child: TextField(
-                      controller: _searchController,
-                      style: TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 15),
-                      onChanged: (val) {
-                        setState(() {
-                          _searchQuery = val;
-                          _applyFilter();
-                        });
-                      },
-                      decoration: InputDecoration(
-                        hintText: 'Search conversations or messages...',
-                        hintStyle: TextStyle(
-                          color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5),
+      body: SafeArea(
+        bottom: false,
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: [
+            // 1. Top Action Row: [Edit] capsule on Left, [≡] Filter circle on Right
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 4),
+              child: Row(
+                mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                children: [
+                  // Native iOS [Edit] Pill Button
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                    },
+                    child: Container(
+                      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                        borderRadius: BorderRadius.circular(16),
+                      ),
+                      child: Text(
+                        'Edit',
+                        style: TextStyle(
+                          color: isDark ? Colors.white : Colors.black87,
                           fontSize: 14,
+                          fontWeight: FontWeight.w600,
                         ),
-                        prefixIcon: const Icon(Icons.search_rounded, size: 20, color: LiquidGlassTheme.textSecondary),
-                        suffixIcon: _searchQuery.isNotEmpty
-                            ? IconButton(
-                                icon: const Icon(Icons.close_rounded, size: 18, color: LiquidGlassTheme.textSecondary),
-                                onPressed: () {
-                                  _searchController.clear();
-                                  setState(() {
-                                    _searchQuery = '';
-                                    _applyFilter();
-                                  });
-                                },
-                              )
-                            : null,
-                        border: InputBorder.none,
-                        contentPadding: const EdgeInsets.symmetric(vertical: 11),
                       ),
                     ),
                   ),
-                ),
 
-                // Thread List
-                Expanded(
-                  child: _filteredThreads.isEmpty
-                      ? Center(
-                          child: Column(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            children: [
-                              Icon(
-                                Icons.chat_bubble_outline_rounded,
-                                size: 54,
-                                color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.4),
-                              ),
-                              const SizedBox(height: 16),
-                              Text(
-                                _searchQuery.isNotEmpty ? 'No conversations found' : 'No SMS messages yet',
-                                style: const TextStyle(
-                                  color: LiquidGlassTheme.textSecondary,
-                                  fontSize: 16,
-                                  fontWeight: FontWeight.w500,
-                                ),
-                              ),
-                              const SizedBox(height: 8),
-                              Text(
-                                _searchQuery.isNotEmpty
-                                    ? 'Try another search query'
-                                    : 'Messages sent and received via Vivo S1 appear here',
-                                style: TextStyle(
-                                  color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.7),
-                                  fontSize: 13,
-                                ),
-                              ),
-                            ],
-                          ),
-                        )
-                      : ListView.separated(
-                          padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 140),
-                          itemCount: _filteredThreads.length,
-                          separatorBuilder: (context, index) => const SizedBox(height: 8),
-                          itemBuilder: (context, index) {
-                            final thread = _filteredThreads[index];
-                            return _buildThreadCard(thread);
-                          },
-                        ),
-                ),
-              ],
+                  // Native iOS Filter Menu Circle Button
+                  GestureDetector(
+                    onTap: () {
+                      HapticFeedback.lightImpact();
+                    },
+                    child: Container(
+                      width: 34,
+                      height: 34,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF2C2C2E) : const Color(0xFFE5E5EA),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.tune_rounded,
+                        color: isDark ? Colors.white : Colors.black87,
+                        size: 18,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
             ),
+
+            // 2. Large Bold "Messages" Title
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, top: 4, bottom: 10),
+              child: Text(
+                'Messages',
+                style: TextStyle(
+                  color: isDark ? Colors.white : Colors.black,
+                  fontSize: 34,
+                  fontWeight: FontWeight.bold,
+                  letterSpacing: -0.6,
+                ),
+              ),
+            ),
+
+            // 3. Thread List
+            Expanded(
+              child: _isLoading
+                  ? const Center(child: CircularProgressIndicator())
+                  : RefreshIndicator(
+                      onRefresh: () async {
+                        await RelayClient.instance.fetchMessages();
+                        await _loadThreads();
+                      },
+                      child: _filteredThreads.isEmpty
+                          ? ListView(
+                              children: [
+                                SizedBox(height: MediaQuery.of(context).size.height * 0.2),
+                                Center(
+                                  child: Column(
+                                    children: [
+                                      Icon(
+                                        Icons.chat_bubble_outline_rounded,
+                                        size: 54,
+                                        color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.4),
+                                      ),
+                                      const SizedBox(height: 16),
+                                      Text(
+                                        _searchQuery.isNotEmpty ? 'No conversations found' : 'No SMS messages yet',
+                                        style: const TextStyle(
+                                          color: LiquidGlassTheme.textSecondary,
+                                          fontSize: 16,
+                                          fontWeight: FontWeight.w500,
+                                        ),
+                                      ),
+                                      const SizedBox(height: 8),
+                                      Text(
+                                        _searchQuery.isNotEmpty
+                                            ? 'Try another search query'
+                                            : 'Pull down to sync messages from Vivo S1',
+                                        style: TextStyle(
+                                          color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.7),
+                                          fontSize: 13,
+                                        ),
+                                      ),
+                                    ],
+                                  ),
+                                ),
+                              ],
+                            )
+                          : ListView.separated(
+                              padding: const EdgeInsets.only(top: 0, bottom: 160),
+                              itemCount: _filteredThreads.length,
+                              separatorBuilder: (context, index) => Divider(
+                                color: isDark ? Colors.white12 : const Color(0xFFE5E5EA),
+                                height: 1,
+                                indent: 76,
+                              ),
+                              itemBuilder: (context, index) {
+                                final thread = _filteredThreads[index];
+                                return _buildThreadCard(thread);
+                              },
+                            ),
+                    ),
+            ),
+
+            // 4. Native iOS Bottom Floating Search & Compose Bar
+            Padding(
+              padding: const EdgeInsets.only(left: 16, right: 16, bottom: 94, top: 4),
+              child: Row(
+                children: [
+                  // Pill Search Input Capsule
+                  Expanded(
+                    child: Container(
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1C1C1E) : const Color(0xFFEFEFF4),
+                        borderRadius: BorderRadius.circular(22),
+                      ),
+                      padding: const EdgeInsets.symmetric(horizontal: 12),
+                      child: Row(
+                        children: [
+                          const Icon(Icons.search_rounded, size: 20, color: Color(0xFF8E8E93)),
+                          const SizedBox(width: 8),
+                          Expanded(
+                            child: TextField(
+                              controller: _searchController,
+                              style: TextStyle(
+                                color: isDark ? Colors.white : Colors.black87,
+                                fontSize: 15,
+                              ),
+                              onChanged: (val) {
+                                setState(() {
+                                  _searchQuery = val;
+                                  _applyFilter();
+                                });
+                              },
+                              decoration: const InputDecoration(
+                                hintText: 'Search',
+                                hintStyle: TextStyle(
+                                  color: Color(0xFF8E8E93),
+                                  fontSize: 15,
+                                ),
+                                border: InputBorder.none,
+                                isDense: true,
+                                contentPadding: EdgeInsets.symmetric(vertical: 10),
+                              ),
+                            ),
+                          ),
+                          if (_searchQuery.isNotEmpty)
+                            GestureDetector(
+                              onTap: () {
+                                _searchController.clear();
+                                setState(() {
+                                  _searchQuery = '';
+                                  _applyFilter();
+                                });
+                              },
+                              child: const Icon(Icons.close_rounded, size: 18, color: Color(0xFF8E8E93)),
+                            )
+                          else
+                            const Icon(Icons.mic_rounded, size: 20, color: Color(0xFF8E8E93)),
+                        ],
+                      ),
+                    ),
+                  ),
+                  const SizedBox(width: 10),
+
+                  // Native iOS Compose Circle Button [📝]
+                  GestureDetector(
+                    onTap: () => _openComposeSheet(),
+                    child: Container(
+                      width: 42,
+                      height: 42,
+                      decoration: BoxDecoration(
+                        color: isDark ? const Color(0xFF1C1C1E) : const Color(0xFFEFEFF4),
+                        shape: BoxShape.circle,
+                      ),
+                      child: Icon(
+                        Icons.edit_square,
+                        size: 20,
+                        color: isDark ? Colors.white : Colors.black87,
+                      ),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   Widget _buildThreadCard(SmsThreadModel thread) {
+    final isDark = Theme.of(context).brightness == Brightness.dark;
     final latest = thread.latestMessage;
-    final isOutgoing = latest.sender.startsWith('To:');
     final hasOtp = thread.hasOtp;
     final unread = thread.unreadCount > 0;
+    final initials = _getInitials(thread.displayName);
 
-    return GlassCard(
-      borderRadius: 16,
-      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+    return InkWell(
       onTap: () => _openThread(thread),
-      color: hasOtp
-          ? const Color(0x352A2410)
-          : (unread ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.08) : LiquidGlassTheme.glassFill),
-      border: hasOtp
-          ? Border.all(color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.4), width: 1)
-          : (unread
-              ? Border.all(color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.35), width: 1)
-              : null),
-      child: Row(
-        crossAxisAlignment: CrossAxisAlignment.center,
-        children: [
-          // Monogram Contact Avatar
-          ContactAvatarWidget(
-            contactId: thread.contactId,
-            displayName: thread.displayName,
-            size: 48,
-            fontSize: 20,
-          ),
-          const SizedBox(width: 12),
+      splashColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.04),
+      highlightColor: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.02),
+      child: Padding(
+        padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 11),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.center,
+          children: [
+            // iOS unread indicator dot (left of avatar if unread)
+            if (unread) ...[
+              Container(
+                width: 10,
+                height: 10,
+                margin: const EdgeInsets.only(right: 6),
+                decoration: const BoxDecoration(
+                  color: Color(0xFF007AFF),
+                  shape: BoxShape.circle,
+                ),
+              ),
+            ],
 
-          // Thread Details
-          Expanded(
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                // Row 1: Name / Address + Time
-                Row(
-                  children: [
-                    if (isOutgoing) ...[
-                      Icon(
-                        Icons.arrow_outward_rounded,
-                        size: 13,
-                        color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.9),
+            // iOS Slate Blue Avatar (Letter Initials or Person Silhouette)
+            Container(
+              width: 48,
+              height: 48,
+              decoration: const BoxDecoration(
+                color: Color(0xFF8A9BB8),
+                shape: BoxShape.circle,
+              ),
+              alignment: Alignment.center,
+              child: initials.isNotEmpty
+                  ? Text(
+                      initials,
+                      style: const TextStyle(
+                        color: Colors.white,
+                        fontSize: 18,
+                        fontWeight: FontWeight.w600,
+                        letterSpacing: -0.3,
                       ),
-                      const SizedBox(width: 4),
-                    ],
-                    Expanded(
-                      child: Text(
-                        thread.displayName,
-                        style: TextStyle(
-                          color: LiquidGlassTheme.textPrimary,
-                          fontSize: 16,
-                          fontWeight: unread ? FontWeight.bold : FontWeight.w600,
+                    )
+                  : const Icon(
+                      Icons.person,
+                      color: Colors.white,
+                      size: 28,
+                    ),
+            ),
+            const SizedBox(width: 12),
+
+            // Content: Display Name + Date + Chevron, and 2-line preview
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: [
+                  // Row 1: Name / Number and Date >
+                  Row(
+                    children: [
+                      Expanded(
+                        child: Text(
+                          thread.displayName,
+                          style: TextStyle(
+                            color: isDark ? Colors.white : Colors.black,
+                            fontSize: 16.5,
+                            fontWeight: FontWeight.bold,
+                            letterSpacing: -0.3,
+                          ),
+                          maxLines: 1,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Text(
+                        _formatIosDate(thread.timestamp),
+                        style: const TextStyle(
+                          color: Color(0xFF8E8E93),
+                          fontSize: 14,
+                          fontWeight: FontWeight.normal,
                           letterSpacing: -0.2,
                         ),
-                        maxLines: 1,
-                        overflow: TextOverflow.ellipsis,
                       ),
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      _formatTimestamp(thread.timestamp),
-                      style: TextStyle(
-                        color: unread ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.textSecondary,
-                        fontSize: 12,
-                        fontWeight: unread ? FontWeight.w600 : FontWeight.normal,
+                      const SizedBox(width: 3),
+                      const Icon(
+                        Icons.chevron_right,
+                        size: 16,
+                        color: Color(0xFFC7C7CC),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 4),
-
-                // Row 2: Message preview snippet + Badges
-                Row(
-                  children: [
-                    Expanded(
-                      child: Text(
-                        latest.body,
-                        style: TextStyle(
-                          color: unread
-                              ? LiquidGlassTheme.textPrimary
-                              : LiquidGlassTheme.textSecondary.withValues(alpha: 0.8),
-                          fontSize: 13.5,
-                          fontWeight: unread ? FontWeight.w500 : FontWeight.normal,
-                          height: 1.25,
-                        ),
-                        maxLines: 2,
-                        overflow: TextOverflow.ellipsis,
-                      ),
-                    ),
-                    const SizedBox(width: 8),
-
-                    // OTP badge
-                    if (hasOtp) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.2),
-                          borderRadius: BorderRadius.circular(6),
-                          border: Border.all(color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.4), width: 0.5),
-                        ),
-                        child: Row(
-                          mainAxisSize: MainAxisSize.min,
-                          children: [
-                            const Icon(Icons.shield_outlined, color: LiquidGlassTheme.goldOtp, size: 10),
-                            const SizedBox(width: 3),
-                            Text(
-                              thread.latestOtp ?? 'OTP',
-                              style: const TextStyle(
-                                color: LiquidGlassTheme.goldOtp,
-                                fontSize: 10,
-                                fontWeight: FontWeight.bold,
-                              ),
-                            ),
-                          ],
-                        ),
-                      ),
-                      const SizedBox(width: 6),
                     ],
+                  ),
+                  const SizedBox(height: 3),
 
-                    // Message count pill
-                    if (thread.messages.length > 1) ...[
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: Colors.white.withValues(alpha: 0.08),
-                          borderRadius: BorderRadius.circular(8),
-                        ),
+                  // Row 2: 2-line Message snippet & OTP chip if detected
+                  Row(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: [
+                      Expanded(
                         child: Text(
-                          '${thread.messages.length}',
-                          style: const TextStyle(
-                            color: LiquidGlassTheme.textSecondary,
-                            fontSize: 11,
-                            fontWeight: FontWeight.w600,
+                          latest.body,
+                          style: TextStyle(
+                            color: isDark ? const Color(0xFF98989E) : const Color(0xFF8E8E93),
+                            fontSize: 14,
+                            height: 1.25,
+                            fontWeight: unread ? FontWeight.w500 : FontWeight.normal,
+                          ),
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                        ),
+                      ),
+                      if (hasOtp) ...[
+                        const SizedBox(width: 6),
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
+                          decoration: BoxDecoration(
+                            color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.15),
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: LiquidGlassTheme.goldOtp.withValues(alpha: 0.4),
+                              width: 0.5,
+                            ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              const Icon(Icons.shield_outlined, color: LiquidGlassTheme.goldOtp, size: 10),
+                              const SizedBox(width: 3),
+                              Text(
+                                thread.latestOtp ?? 'OTP',
+                                style: const TextStyle(
+                                  color: LiquidGlassTheme.goldOtp,
+                                  fontSize: 10,
+                                  fontWeight: FontWeight.bold,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
-                      ),
+                      ],
                     ],
-
-                    // Unread blue indicator dot
-                    if (unread) ...[
-                      const SizedBox(width: 6),
-                      Container(
-                        width: 9,
-                        height: 9,
-                        decoration: const BoxDecoration(
-                          color: LiquidGlassTheme.iosBlue,
-                          shape: BoxShape.circle,
-                        ),
-                      ),
-                    ],
-                  ],
-                ),
-              ],
+                  ),
+                ],
+              ),
             ),
-          ),
-        ],
+          ],
+        ),
       ),
     );
   }
 
-  String _formatTimestamp(int ts) {
+  String _getInitials(String name) {
+    final clean = name.trim();
+    if (clean.isEmpty) return '';
+    // If it's a numeric phone number or shortcode (e.g. 9771, 2300, 8901), return ''
+    if (RegExp(r'^[+\d\s\-\(\)]+$').hasMatch(clean)) return '';
+    // If it has hyphens or resembles service short name like Zong-OR, return ''
+    if (clean.contains('-') || clean.contains('_')) return '';
+
+    final words = clean.split(RegExp(r'\s+')).where((w) => w.isNotEmpty).toList();
+    if (words.length >= 2) {
+      final firstLetter = words[0][0].toUpperCase();
+      final secondLetter = words[1][0].toUpperCase();
+      return '$firstLetter$secondLetter';
+    } else if (words.isNotEmpty) {
+      return words[0][0].toUpperCase();
+    }
+    return '';
+  }
+
+  String _formatIosDate(int ts) {
     if (ts <= 0) return '';
     final dt = DateTime.fromMillisecondsSinceEpoch(ts);
     final now = DateTime.now();
@@ -466,13 +569,10 @@ class _MessagesScreenState extends State<MessagesScreen> {
       return '$hour:$min $ampm';
     }
 
-    final yesterday = now.subtract(const Duration(days: 1));
-    if (dt.year == yesterday.year && dt.month == yesterday.month && dt.day == yesterday.day) {
-      return 'Yesterday';
-    }
-
-    final months = ['Jan', 'Feb', 'Mar', 'Apr', 'May', 'Jun', 'Jul', 'Aug', 'Sep', 'Oct', 'Nov', 'Dec'];
-    return '${months[dt.month - 1]} ${dt.day}';
+    final d = dt.day.toString().padLeft(2, '0');
+    final m = dt.month.toString().padLeft(2, '0');
+    final y = dt.year.toString();
+    return '$d/$m/$y';
   }
 }
 

@@ -432,13 +432,15 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
             ),
           ),
 
-          // Floating iOS Glass Dock Bar (Centered)
-          Positioned(
-            left: 20,
-            right: 20,
-            bottom: 24,
-            child: _buildLiquidGlassDock(),
-          ),
+          // Floating iOS Glass Dock Bar (Centered) - hidden while keyboard is active
+          if (MediaQuery.of(context).viewInsets.bottom == 0)
+            Positioned(
+              left: 20,
+              right: 20,
+              bottom: 24,
+              child: _buildLiquidGlassDock(),
+            ),
+
 
           // In-Call Overlay: Full-Screen iOS 17/18 InCallScreen OR Minimized Dynamic Island Pill
           StreamBuilder<ActiveCallInfo?>(

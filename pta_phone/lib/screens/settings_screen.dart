@@ -545,12 +545,19 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               TextField(
                 controller: ipCtrl,
                 style: TextStyle(color: isDark ? Colors.white : Colors.black87),
+                keyboardType: const TextInputType.numberWithOptions(decimal: true),
+                textInputAction: TextInputAction.next,
                 decoration: InputDecoration(
                   labelText: 'Host IP Address',
                   hintText: '192.168.43.1',
                   hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38, fontSize: 13),
                   labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
                   prefixIcon: const Icon(Icons.router_rounded, size: 20),
+                  suffixIcon: IconButton(
+                    icon: const Icon(Icons.check_circle_outline_rounded, color: LiquidGlassTheme.gsmGreen, size: 20),
+                    tooltip: 'Done',
+                    onPressed: () => FocusScope.of(ctx).unfocus(),
+                  ),
                   border: OutlineInputBorder(borderRadius: BorderRadius.circular(14)),
                 ),
               ),
@@ -609,6 +616,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
   @override
   Widget build(BuildContext context) {
     final isDark = LiquidGlassTheme.isDarkMode;
+    final keyboardVisible = MediaQuery.of(context).viewInsets.bottom > 0;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -617,17 +625,23 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
         backgroundColor: Colors.transparent,
         elevation: 0,
       ),
-      body: StreamBuilder<DeviceStatusModel>(
-        stream: RelayClient.instance.statusStream,
-        initialData: RelayClient.instance.lastStatus,
-        builder: (context, snapshot) {
-          final status = snapshot.data;
-          final isConnected = RelayClient.instance.isConnected;
+      body: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: () => FocusScope.of(context).unfocus(),
+        child: Column(
+          children: [
+            Expanded(
+              child: StreamBuilder<DeviceStatusModel>(
+                stream: RelayClient.instance.statusStream,
+                initialData: RelayClient.instance.lastStatus,
+                builder: (context, snapshot) {
+                  final status = snapshot.data;
+                  final isConnected = RelayClient.instance.isConnected;
 
-          return ListView(
-            padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 120),
-            children: [
-              // 1. Direct Wi-Fi / Hotspot IP Configuration (AT THE VERY TOP)
+                  return ListView(
+                    padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 120),
+                    children: [
+                      // 1. Direct Wi-Fi / Hotspot IP Configuration (AT THE VERY TOP)
               _buildSectionHeader(
                 'HOST ADDRESS CONFIGURATION',
                 icon: Icons.router_rounded,
@@ -723,6 +737,88 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             ],
           );
         },
+      ),
+    ),
+    if (keyboardVisible) _buildKeyboardAccessoryBar(isDark),
+  ],
+),
+      ),
+    );
+  }
+
+  /// Authentic iOS keyboard accessory toolbar docked directly above the numeric keypad
+  Widget _buildKeyboardAccessoryBar(bool isDark) {
+    return Container(
+      width: double.infinity,
+      height: 44,
+      padding: const EdgeInsets.symmetric(horizontal: 16),
+      decoration: BoxDecoration(
+        color: isDark ? const Color(0xFF1C1C24) : const Color(0xFFEFEFF4),
+        border: Border(
+          top: BorderSide(
+            color: isDark ? Colors.white12 : Colors.black12,
+            width: 0.8,
+          ),
+        ),
+        boxShadow: [
+          BoxShadow(
+            color: Colors.black.withValues(alpha: 0.15),
+            blurRadius: 4,
+            offset: const Offset(0, -1),
+          ),
+        ],
+      ),
+      child: Row(
+        mainAxisAlignment: MainAxisAlignment.spaceBetween,
+        children: [
+          Row(
+            children: [
+              Icon(Icons.keyboard_rounded, size: 18, color: LiquidGlassTheme.iosBlue),
+              const SizedBox(width: 8),
+              Text(
+                'Vivo Host IP / Port',
+                style: TextStyle(
+                  fontSize: 13,
+                  fontWeight: FontWeight.w600,
+                  color: isDark ? Colors.white70 : Colors.black87,
+                ),
+              ),
+            ],
+          ),
+          InkWell(
+            borderRadius: BorderRadius.circular(14),
+            onTap: () {
+              HapticFeedback.mediumImpact();
+              FocusScope.of(context).unfocus();
+            },
+            child: Container(
+              padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 6),
+              decoration: BoxDecoration(
+                color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.18),
+                borderRadius: BorderRadius.circular(14),
+                border: Border.all(
+                  color: LiquidGlassTheme.gsmGreen,
+                  width: 1,
+                ),
+              ),
+              child: const Row(
+                mainAxisSize: MainAxisSize.min,
+                children: [
+                  Icon(Icons.check_circle_rounded, size: 16, color: LiquidGlassTheme.gsmGreen),
+                  SizedBox(width: 6),
+                  Text(
+                    'Done',
+                    style: TextStyle(
+                      color: LiquidGlassTheme.gsmGreen,
+                      fontSize: 13,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        ],
       ),
     );
   }
@@ -1909,6 +2005,8 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 fontWeight: FontWeight.w600,
               ),
               keyboardType: const TextInputType.numberWithOptions(decimal: true),
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => FocusScope.of(context).unfocus(),
               decoration: InputDecoration(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 labelText: 'Vivo Host IP Address',
@@ -1953,6 +2051,41 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                         ),
                       ),
                     ),
+                    // "Good sign" (✓ / Done) button to send back / dismiss keyboard
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        FocusScope.of(context).unfocus();
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.check_rounded, size: 14, color: LiquidGlassTheme.gsmGreen),
+                            SizedBox(width: 3),
+                            Text(
+                              'DONE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: LiquidGlassTheme.gsmGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                     if (_ipController.text.isNotEmpty)
                       IconButton(
                         icon: const Icon(Icons.clear_rounded, size: 18),
@@ -1980,6 +2113,8 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             child: TextField(
               controller: _portController,
               keyboardType: TextInputType.number,
+              textInputAction: TextInputAction.done,
+              onSubmitted: (_) => FocusScope.of(context).unfocus(),
               style: TextStyle(
                 color: isDark ? Colors.white : Colors.black87,
                 fontFamily: 'monospace',
@@ -2022,6 +2157,41 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                           ),
                         ),
                       ),
+                    // "Good sign" (✓ / Done) button to send back / dismiss keyboard
+                    InkWell(
+                      borderRadius: BorderRadius.circular(8),
+                      onTap: () {
+                        HapticFeedback.lightImpact();
+                        FocusScope.of(context).unfocus();
+                      },
+                      child: Container(
+                        margin: const EdgeInsets.only(right: 6),
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.15),
+                          borderRadius: BorderRadius.circular(8),
+                          border: Border.all(
+                            color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.4),
+                            width: 0.8,
+                          ),
+                        ),
+                        child: const Row(
+                          mainAxisSize: MainAxisSize.min,
+                          children: [
+                            Icon(Icons.check_rounded, size: 14, color: LiquidGlassTheme.gsmGreen),
+                            SizedBox(width: 3),
+                            Text(
+                              'DONE',
+                              style: TextStyle(
+                                fontSize: 10,
+                                fontWeight: FontWeight.bold,
+                                color: LiquidGlassTheme.gsmGreen,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                    ),
                     if (_portController.text.isNotEmpty)
                       IconButton(
                         icon: const Icon(Icons.clear_rounded, size: 18),

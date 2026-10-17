@@ -6,6 +6,7 @@ import '../data/database_helper.dart';
 import '../services/relay_client.dart';
 import '../theme/liquid_glass_theme.dart';
 import '../widgets/contact_avatar_widget.dart';
+import 'contact_detail_screen.dart';
 
 class ContactsScreen extends StatefulWidget {
   const ContactsScreen({super.key});
@@ -89,11 +90,10 @@ class _ContactsScreenState extends State<ContactsScreen> {
 
   void _openContactDetail(ContactModel contact) {
     HapticFeedback.lightImpact();
-    showModalBottomSheet(
-      context: context,
-      backgroundColor: Colors.transparent,
-      isScrollControlled: true,
-      builder: (ctx) => _ContactDetailSheet(contact: contact),
+    Navigator.of(context).push(
+      MaterialPageRoute(
+        builder: (ctx) => ContactDetailScreen(contact: contact),
+      ),
     );
   }
 
@@ -292,82 +292,3 @@ class _ContactsScreenState extends State<ContactsScreen> {
   }
 }
 
-class _ContactDetailSheet extends StatelessWidget {
-  final ContactModel contact;
-
-  const _ContactDetailSheet({required this.contact});
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 40),
-      decoration: const BoxDecoration(
-        color: Color(0xF0121218),
-        borderRadius: BorderRadius.vertical(top: Radius.circular(28)),
-      ),
-      child: Column(
-        mainAxisSize: MainAxisSize.min,
-        children: [
-          Container(
-            width: 40,
-            height: 4,
-            decoration: BoxDecoration(
-              color: Colors.white24,
-              borderRadius: BorderRadius.circular(2),
-            ),
-          ),
-          const SizedBox(height: 20),
-          ContactAvatarWidget(
-            contactId: contact.id,
-            displayName: contact.displayName,
-            size: 68,
-            fontSize: 28,
-          ),
-          const SizedBox(height: 12),
-          Text(
-            contact.displayName,
-            style: const TextStyle(
-              color: LiquidGlassTheme.textPrimary,
-              fontSize: 22,
-              fontWeight: FontWeight.w600,
-            ),
-          ),
-          const SizedBox(height: 24),
-          ...contact.phoneNumbers.map((phone) {
-            return GlassCard(
-              borderRadius: 16,
-              margin: const EdgeInsets.only(bottom: 12),
-              padding: const EdgeInsets.all(14),
-              child: Row(
-                mainAxisAlignment: MainAxisAlignment.spaceBetween,
-                children: [
-                  Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: [
-                      Text(
-                        phone.label.toUpperCase(),
-                        style: const TextStyle(color: LiquidGlassTheme.textSecondary, fontSize: 11, fontWeight: FontWeight.w600),
-                      ),
-                      const SizedBox(height: 4),
-                      Text(
-                        phone.rawNumber,
-                        style: const TextStyle(color: LiquidGlassTheme.textPrimary, fontSize: 16, fontWeight: FontWeight.w500),
-                      ),
-                    ],
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.phone, color: LiquidGlassTheme.gsmGreen, size: 24),
-                    onPressed: () {
-                      Navigator.pop(context);
-                      RelayClient.instance.dialNumber(phone.rawNumber);
-                    },
-                  ),
-                ],
-              ),
-            );
-          }),
-        ],
-      ),
-    );
-  }
-}

@@ -17,12 +17,16 @@ import UserNotifications
   private var audioTimeObserver: Any?
   private var backgroundTask: UIBackgroundTaskIdentifier = .invalid
   private var udpListener: NWListener?
+  private var lastActivityDate: Date = Date()
+  private let maxInactivityDuration: TimeInterval = 7200.0 // 2 Hours (7200 seconds)
+  private var inactivityCheckTimer: Timer?
 
   override func application(
     _ application: UIApplication,
     didFinishLaunchingWithOptions launchOptions: [UIApplication.LaunchOptionsKey: Any]?
   ) -> Bool {
     AppDelegate.shared = self
+    setupInactivityTimer()
     startSilentAudioKeepAlive()
     setupAudioInterruptionObserver()
     startUdpListener()
@@ -57,16 +61,19 @@ import UserNotifications
   // MARK: - Scene & Application Lifecycle Handlers (Permanent Keep-Alive)
 
   func handleSceneDidEnterBackground() {
+    resetInactivityTimer()
     ensureKeepAlivePlaying()
     startBackgroundTask()
   }
 
   func handleSceneWillEnterForeground() {
+    resetInactivityTimer()
     ensureKeepAlivePlaying()
     endBackgroundTask()
   }
 
   func handleSceneDidBecomeActive() {
+    resetInactivityTimer()
     ensureKeepAlivePlaying()
   }
 
@@ -186,7 +193,41 @@ import UserNotifications
     }
   }
 
+  func resetInactivityTimer() {
+    lastActivityDate = Date()
+    if silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false {
+      ensureKeepAlivePlaying()
+    }
+  }
+
+  private func setupInactivityTimer() {
+    inactivityCheckTimer?.invalidate()
+    inactivityCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
+      self?.checkInactivityTimeout()
+    }
+  }
+
+  private func checkInactivityTimeout() {
+    let elapsed = Date().timeIntervalSince(lastActivityDate)
+    if elapsed >= maxInactivityDuration {
+      if silentAudioPlayer?.isPlaying == true {
+        print("[AppDelegate] ⏱️ 2-Hour inactivity limit reached (\(Int(elapsed))s). Pausing keep-alive audio to allow system sleep.")
+        silentAudioPlayer?.pause()
+      }
+    } else {
+      if silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false {
+        ensureKeepAlivePlaying()
+      }
+    }
+  }
+
   func ensureKeepAlivePlaying() {
+    // If 2-hour inactivity period has expired, do not keep awake
+    if Date().timeIntervalSince(lastActivityDate) >= maxInactivityDuration {
+      print("[AppDelegate] ⏱️ Skipping keep-alive: 2-hour inactivity window elapsed.")
+      return
+    }
+
     do {
       let audioSession = AVAudioSession.sharedInstance()
       if audioSession.category == .playAndRecord {
@@ -196,17 +237,20 @@ import UserNotifications
       try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
       try audioSession.setActive(true)
 
+      UIApplication.shared.beginReceivingRemoteControlEvents()
+
       if silentAudioPlayer == nil {
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
         silentAudioPlayer?.delegate = self
         silentAudioPlayer?.numberOfLoops = -1
-        silentAudioPlayer?.volume = 0.05
+        silentAudioPlayer?.volume = 0.01
+        silentAudioPlayer?.prepareToPlay()
       }
 
       if silentAudioPlayer?.isPlaying == false {
         silentAudioPlayer?.play()
-        print("[AppDelegate] Silent audio keep-alive player actively playing.")
+        print("[AppDelegate] 🎵 Silent audio keep-alive player actively playing (2-hour window active).")
       }
 
       setupNowPlayingInfo()
@@ -381,6 +425,9 @@ import UserNotifications
           } else {
             result(false)
           }
+        } else if call.method == "pingKeepAlive" {
+          self?.resetInactivityTimer()
+          result(true)
         } else {
           result(FlutterMethodNotImplemented)
         }
