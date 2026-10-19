@@ -20,6 +20,9 @@ import UserNotifications
   private var lastActivityDate: Date = Date()
   private let maxInactivityDuration: TimeInterval = 7200.0 // 2 Hours (7200 seconds)
   private var inactivityCheckTimer: Timer?
+  private var keepAliveNetworkPlayer: AVPlayer?
+  private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.43.1"
+  private var currentHostPort: Int = UserDefaults.standard.integer(forKey: "flutter.host_port") == 0 ? 8080 : UserDefaults.standard.integer(forKey: "flutter.host_port")
 
   override func application(
     _ application: UIApplication,
@@ -55,7 +58,13 @@ import UserNotifications
       intentIdentifiers: [],
       options: []
     )
-    UNUserNotificationCenter.current().setNotificationCategories([missedCategory])
+    let incomingCategory = UNNotificationCategory(
+      identifier: "INCOMING_CALL",
+      actions: [],
+      intentIdentifiers: [],
+      options: []
+    )
+    UNUserNotificationCenter.current().setNotificationCategories([missedCategory, incomingCategory])
   }
 
   // MARK: - Scene & Application Lifecycle Handlers (Permanent Keep-Alive)
@@ -210,14 +219,13 @@ import UserNotifications
   private func checkInactivityTimeout() {
     let elapsed = Date().timeIntervalSince(lastActivityDate)
     if elapsed >= maxInactivityDuration {
-      if silentAudioPlayer?.isPlaying == true {
+      if silentAudioPlayer?.isPlaying == true || keepAliveNetworkPlayer?.timeControlStatus == .playing {
         print("[AppDelegate] ⏱️ 2-Hour inactivity limit reached (\(Int(elapsed))s). Pausing keep-alive audio to allow system sleep.")
         silentAudioPlayer?.pause()
+        keepAliveNetworkPlayer?.pause()
       }
     } else {
-      if silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false {
-        ensureKeepAlivePlaying()
-      }
+      ensureKeepAlivePlaying()
     }
   }
 
@@ -225,6 +233,8 @@ import UserNotifications
     // If 2-hour inactivity period has expired, do not keep awake
     if Date().timeIntervalSince(lastActivityDate) >= maxInactivityDuration {
       print("[AppDelegate] ⏱️ Skipping keep-alive: 2-hour inactivity window elapsed.")
+      silentAudioPlayer?.pause()
+      keepAliveNetworkPlayer?.pause()
       return
     }
 
@@ -239,6 +249,27 @@ import UserNotifications
 
       UIApplication.shared.beginReceivingRemoteControlEvents()
 
+      // 1. Live Network Audio Stream: Pulls low-bitrate 8kHz silence over Wi-Fi
+      // Forces iOS kernel/powerd to retain Wi-Fi network interface awake in pocket
+      let cleanIp = currentHostIp.trimmingCharacters(in: .whitespacesAndNewlines)
+      if !cleanIp.isEmpty, let streamUrl = URL(string: "http://\(cleanIp):\(currentHostPort)/api/stream/silence") {
+        if keepAliveNetworkPlayer == nil {
+          let asset = AVURLAsset(url: streamUrl, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Connection": "keep-alive"]])
+          let item = AVPlayerItem(asset: asset)
+          // 60-second forward buffer for "burst-and-sleep" power efficiency
+          item.preferredForwardBufferDuration = 60.0
+          item.automaticallyPreservesTimeOffsetFromLive = true
+          keepAliveNetworkPlayer = AVPlayer(playerItem: item)
+          keepAliveNetworkPlayer?.volume = 0.01
+          keepAliveNetworkPlayer?.automaticallyWaitsToMinimizeStalling = true
+        }
+        if keepAliveNetworkPlayer?.timeControlStatus != .playing {
+          keepAliveNetworkPlayer?.play()
+          print("[AppDelegate] 📡 Live network audio keep-alive streaming from \(streamUrl.absoluteString) (Wi-Fi retention active).")
+        }
+      }
+
+      // 2. Local synthetic fallback player (guarantees active audio session if network momentarily reconnects)
       if silentAudioPlayer == nil {
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
@@ -375,6 +406,7 @@ import UserNotifications
         let number = dataObj["number"] as? String ?? ""
         let name = dataObj["name"] as? String ?? number
         let callId = dataObj["call_id"] as? String ?? UUID().uuidString
+        self.showIncomingCallNotification(number: number, name: name)
         self.getNativeChannel()?.invokeMethod("onNativeIncomingCall", arguments: [
           "number": number,
           "name": name,
@@ -426,6 +458,22 @@ import UserNotifications
             result(false)
           }
         } else if call.method == "pingKeepAlive" {
+          if let args = call.arguments as? [String: Any] {
+            var needsPlayerRefresh = false
+            if let ip = args["hostIp"] as? String, !ip.isEmpty, ip != self?.currentHostIp {
+              self?.currentHostIp = ip
+              needsPlayerRefresh = true
+            }
+            if let port = args["hostPort"] as? Int, port > 0, port != self?.currentHostPort {
+              self?.currentHostPort = port
+              needsPlayerRefresh = true
+            }
+            if needsPlayerRefresh {
+              self?.keepAliveNetworkPlayer?.pause()
+              self?.keepAliveNetworkPlayer = nil
+              self?.ensureKeepAlivePlaying()
+            }
+          }
           self?.resetInactivityTimer()
           result(true)
         } else {
@@ -624,6 +672,29 @@ import UserNotifications
         print("[AppDelegate] Error posting missed call notification: \(error)")
       } else {
         print("[AppDelegate] Successfully posted missed call notification for \(number)")
+      }
+    }
+  }
+
+  func showIncomingCallNotification(number: String, name: String) {
+    let content = UNMutableNotificationContent()
+    content.title = "Incoming Cellular Call"
+    let displayTitle = (name.isEmpty || name == number) ? number : "\(name) (\(number))"
+    content.body = "Incoming call from \(displayTitle)"
+    content.sound = UNNotificationSound.default
+    content.userInfo = ["number": number, "name": name]
+    content.categoryIdentifier = "INCOMING_CALL"
+
+    let request = UNNotificationRequest(
+      identifier: "incoming_\(Date().timeIntervalSince1970)",
+      content: content,
+      trigger: nil
+    )
+    UNUserNotificationCenter.current().add(request) { error in
+      if let error = error {
+        print("[AppDelegate] Error posting incoming call notification: \(error)")
+      } else {
+        print("[AppDelegate] Successfully posted incoming call notification for \(number)")
       }
     }
   }

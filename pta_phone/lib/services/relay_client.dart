@@ -525,16 +525,18 @@ class RelayClient {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
-        // In background/screen locked, allow up to 180s before watchdog teardown to prevent false disconnects
-        final maxWatchdogTimeout = isAppPaused ? 180000 : 60000;
+        // In background/screen locked, allow up to 300s (5 mins) before watchdog teardown to prevent false disconnects
+        final maxWatchdogTimeout = isAppPaused ? 300000 : 60000;
         if (elapsedSincePong > maxWatchdogTimeout) {
           logDiagnostic('Ping watchdog timeout (>${maxWatchdogTimeout ~/ 1000}s no response). Disconnecting to trigger instant reconnect.');
           disconnect();
           connect();
           return;
         }
-        // Send PING if no packets were received from the host in the last 15 seconds
-        if (now - _lastPongTime >= 15000) {
+        // Send PING if no packets were received from the host:
+        // In foreground: every 15s. In background: every 75s (reduces CPU wakeups by 80% to save battery).
+        final pingThreshold = isAppPaused ? 75000 : 15000;
+        if (now - _lastPongTime >= pingThreshold) {
           try {
             _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
             _channel!.sink.add(RelayMessage.ping().toJsonString());
@@ -551,7 +553,10 @@ class RelayClient {
 
   void _pingNativeKeepAlive() {
     try {
-      const MethodChannel('com.pta.phone/native_intents').invokeMethod('pingKeepAlive');
+      const MethodChannel('com.pta.phone/native_intents').invokeMethod('pingKeepAlive', {
+        'hostIp': hostIp,
+        'hostPort': hostPort,
+      });
     } catch (_) {}
   }
 
@@ -591,7 +596,9 @@ class RelayClient {
 
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
-    _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
+    // In background, relax reconnect polling to 15s instead of 3s to conserve CPU & Wi-Fi power
+    final pollInterval = isAppPaused ? const Duration(seconds: 15) : const Duration(seconds: 3);
+    _reconnectTimer = Timer.periodic(pollInterval, (timer) async {
       if (_isConnected) {
         logDiagnostic('✅ Devices connected: stopping background search.');
         timer.cancel();
@@ -606,15 +613,18 @@ class RelayClient {
           return;
         }
       }
-      logDiagnostic('⚡ Background search running for Vivo S1...');
-      final discoveredIp = await discoverHostIp();
-      if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
-        hostIp = discoveredIp;
-        final prefs = await SharedPreferences.getInstance();
-        await prefs.setString('host_ip', hostIp);
-      }
-      if (!_isConnected) {
-        connect();
+      // Only perform heavy network subnet sweeps when app is in foreground
+      if (!isAppPaused) {
+        logDiagnostic('⚡ Background search running for Vivo S1...');
+        final discoveredIp = await discoverHostIp();
+        if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
+          hostIp = discoveredIp;
+          final prefs = await SharedPreferences.getInstance();
+          await prefs.setString('host_ip', hostIp);
+        }
+        if (!_isConnected) {
+          connect();
+        }
       }
     });
   }
@@ -1202,12 +1212,14 @@ class RelayClient {
         logDiagnostic('📥 Synced ${recordings.length} latest recordings from Vivo S1 host');
         await DatabaseHelper.instance.saveRecordings(recordings);
 
-        // Pre-download top 3 newest missing recordings sequentially in background
-        final topRecent = recordings.take(3).toList();
-        for (final rec in topRecent) {
-          final local = await getLocalRecordingPath(rec.filename);
-          if (local == null && _isConnected) {
-            await downloadRecordingAudio(rec.filename);
+        // Power saving: Only pre-download audio files when app is active in foreground
+        if (!isAppPaused) {
+          final topRecent = recordings.take(3).toList();
+          for (final rec in topRecent) {
+            final local = await getLocalRecordingPath(rec.filename);
+            if (local == null && _isConnected && !isAppPaused) {
+              await downloadRecordingAudio(rec.filename);
+            }
           }
         }
       }

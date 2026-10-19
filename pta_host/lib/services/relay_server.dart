@@ -1,6 +1,8 @@
 import 'dart:async';
 import 'dart:convert';
 import 'dart:io';
+import 'dart:math' as math;
+import 'dart:typed_data';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -686,7 +688,100 @@ class RelayServer {
     );
   }
 
+  // 13. Low-Bitrate Silence Stream (Maintains iOS Wi-Fi interface in deep sleep)
+  if (path == 'api/stream/silence') {
+    StreamController<List<int>>? streamController;
+    Timer? pushTimer;
+
+    streamController = StreamController<List<int>>(
+      onListen: () {
+        streamController!.add(_createSilenceWavHeader(sampleRate: 8000));
+        final chunk = _createSubBassPcmChunk(sampleRate: 8000, durationSeconds: 1.0);
+        streamController.add(chunk);
+        pushTimer = Timer.periodic(const Duration(seconds: 1), (_) {
+          if (!streamController!.isClosed) {
+            streamController.add(chunk);
+          }
+        });
+      },
+      onCancel: () {
+        pushTimer?.cancel();
+        streamController?.close();
+      },
+    );
+
+    return Response.ok(
+      streamController.stream,
+      headers: {
+        'content-type': 'audio/wav',
+        'cache-control': 'no-cache, no-store',
+        'connection': 'keep-alive',
+        'access-control-allow-origin': '*',
+      },
+    );
+  }
+
     return Response.notFound('Not found');
+  }
+
+  /// Generates a valid RIFF/WAVE header for infinite low-power 8kHz mono audio
+  List<int> _createSilenceWavHeader({int sampleRate = 8000}) {
+    final byteRate = sampleRate * 1 * 2;
+    const blockAlign = 2;
+    const bitsPerSample = 16;
+    const dataSize = 0x7FFFF000;
+    final chunkSize = 36 + dataSize;
+
+    final bytes = BytesBuilder();
+    bytes.add('RIFF'.codeUnits);
+    bytes.add([
+      chunkSize & 0xFF,
+      (chunkSize >> 8) & 0xFF,
+      (chunkSize >> 16) & 0xFF,
+      (chunkSize >> 24) & 0xFF,
+    ]);
+    bytes.add('WAVE'.codeUnits);
+    bytes.add('fmt '.codeUnits);
+    bytes.add([16, 0, 0, 0]);
+    bytes.add([1, 0]);
+    bytes.add([1, 0]);
+    bytes.add([
+      sampleRate & 0xFF,
+      (sampleRate >> 8) & 0xFF,
+      (sampleRate >> 16) & 0xFF,
+      (sampleRate >> 24) & 0xFF,
+    ]);
+    bytes.add([
+      byteRate & 0xFF,
+      (byteRate >> 8) & 0xFF,
+      (byteRate >> 16) & 0xFF,
+      (byteRate >> 24) & 0xFF,
+    ]);
+    bytes.add([blockAlign, 0]);
+    bytes.add([bitsPerSample, 0]);
+    bytes.add('data'.codeUnits);
+    bytes.add([
+      dataSize & 0xFF,
+      (dataSize >> 8) & 0xFF,
+      (dataSize >> 16) & 0xFF,
+      (dataSize >> 24) & 0xFF,
+    ]);
+    return bytes.toBytes();
+  }
+
+  /// Generates a lightweight 1-second 20Hz sub-bass PCM chunk (inaudible, prevents mediaserverd idle kill)
+  Uint8List _createSubBassPcmChunk({int sampleRate = 8000, double durationSeconds = 1.0}) {
+    final totalSamples = (sampleRate * durationSeconds).toInt();
+    final pcmBytes = Uint8List(totalSamples * 2);
+    final buffer = ByteData.view(pcmBytes.buffer);
+    const frequency = 20.0;
+    const amplitude = 30.0;
+    for (int i = 0; i < totalSamples; i++) {
+      final angle = 2.0 * math.pi * frequency * i / sampleRate;
+      final sample = (math.sin(angle) * amplitude).toInt();
+      buffer.setInt16(i * 2, sample, Endian.little);
+    }
+    return pcmBytes;
   }
 }
 
