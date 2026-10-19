@@ -508,7 +508,11 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   /// Sleek iOS Dynamic Island In-Call Capsule Pill when call is minimized
   Widget _buildDynamicIslandCallPill(ActiveCallInfo callInfo) {
     final title = callInfo.callerName.isNotEmpty ? callInfo.callerName : callInfo.number;
-    final dur = callInfo.durationSeconds;
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final computed = (callInfo.state == PhoneCallState.connected && callInfo.startTime > 0 && callInfo.startTime <= now)
+        ? (now - callInfo.startTime) ~/ 1000
+        : callInfo.durationSeconds;
+    final dur = computed >= 0 ? computed : callInfo.durationSeconds;
     final m = (dur ~/ 60).toString().padLeft(2, '0');
     final s = (dur % 60).toString().padLeft(2, '0');
     final timeStr = callInfo.state == PhoneCallState.connected

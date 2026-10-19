@@ -20,7 +20,6 @@ import UserNotifications
   private var lastActivityDate: Date = Date()
   private let maxInactivityDuration: TimeInterval = 7200.0 // 2 Hours (7200 seconds)
   private var inactivityCheckTimer: Timer?
-  private var keepAliveNetworkPlayer: AVPlayer?
   private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.43.1"
   private var currentHostPort: Int = UserDefaults.standard.integer(forKey: "flutter.host_port") == 0 ? 8080 : UserDefaults.standard.integer(forKey: "flutter.host_port")
   private var isCallActive: Bool = false
@@ -90,6 +89,8 @@ import UserNotifications
   private func startBackgroundTask() {
     endBackgroundTask()
     backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") { [weak self] in
+      print("[AppDelegate] ⏱️ System background task expired. Re-asserting continuous audio keep-alive...")
+      self?.ensureKeepAlivePlaying()
       self?.endBackgroundTask()
     }
   }
@@ -162,7 +163,9 @@ import UserNotifications
 
   @objc private func handleAudioRouteChange(_ notification: Notification) {
     print("[AppDelegate] Audio route changed (AirPods/Bluetooth/Lock). Ensuring keep-alive...")
-    ensureKeepAlivePlaying()
+    DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
+      self?.ensureKeepAlivePlaying()
+    }
   }
 
   @objc private func handleAudioInterruption(_ notification: Notification) {
@@ -174,18 +177,14 @@ import UserNotifications
 
     if type == .ended {
       print("[AppDelegate] Audio Interruption Ended -> Resuming background keep-alive...")
-      if !isCallActive {
-        ensureKeepAlivePlaying()
-      }
+      ensureKeepAlivePlaying()
     }
   }
 
   @objc private func handleMediaServicesReset(_ notification: Notification) {
     print("[AppDelegate] Media Services Were Reset -> Recreating audio keep-alive player...")
     silentAudioPlayer = nil
-    if !isCallActive {
-      ensureKeepAlivePlaying()
-    }
+    ensureKeepAlivePlaying()
   }
 
   @objc private func handleMediaServicesLost(_ notification: Notification) {
@@ -193,7 +192,7 @@ import UserNotifications
   }
 
   func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    if player == silentAudioPlayer && !isCallActive {
+    if player == silentAudioPlayer {
       print("[AppDelegate] Silent keep-alive player finished. Looping...")
       silentAudioPlayer?.play()
     }
@@ -203,16 +202,15 @@ import UserNotifications
     if player == silentAudioPlayer {
       print("[AppDelegate] Silent keep-alive player decode error: \(String(describing: error)).")
       silentAudioPlayer = nil
-      DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
-        guard let self = self, !self.isCallActive else { return }
-        self.ensureKeepAlivePlaying()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
+        self?.ensureKeepAlivePlaying()
       }
     }
   }
 
   func resetInactivityTimer() {
     lastActivityDate = Date()
-    if !isCallActive && (silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false) {
+    if silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false {
       ensureKeepAlivePlaying()
     }
   }
@@ -227,43 +225,27 @@ import UserNotifications
   private func checkInactivityTimeout() {
     let elapsed = Date().timeIntervalSince(lastActivityDate)
     if elapsed >= maxInactivityDuration {
-      if silentAudioPlayer?.isPlaying == true || keepAliveNetworkPlayer?.timeControlStatus == .playing {
+      if silentAudioPlayer?.isPlaying == true {
         print("[AppDelegate] ⏱️ 2-Hour inactivity limit reached (\(Int(elapsed))s). Pausing keep-alive audio to allow system sleep.")
         silentAudioPlayer?.pause()
-        keepAliveNetworkPlayer?.pause()
       }
-    } else if !isCallActive {
+    } else {
       ensureKeepAlivePlaying()
     }
   }
 
   func setCallActiveState(_ active: Bool) {
     isCallActive = active
-    if active {
-      print("[AppDelegate] 📞 Call is now active. Pausing keep-alive players to release audio hardware.")
-      silentAudioPlayer?.pause()
-      keepAliveNetworkPlayer?.pause()
-    } else {
-      print("[AppDelegate] 📞 Call disconnected. Resuming keep-alive players.")
-      resetInactivityTimer()
-      ensureKeepAlivePlaying()
-    }
+    print("[AppDelegate] 📞 Call active state changed: \(active). Maintaining audio keep-alive.")
+    resetInactivityTimer()
+    ensureKeepAlivePlaying()
   }
 
   func ensureKeepAlivePlaying() {
-    // If a call is currently active, release all audio hardware immediately
-    if isCallActive {
-      print("[AppDelegate] 📞 Skipping keep-alive: Call is currently active.")
-      silentAudioPlayer?.pause()
-      keepAliveNetworkPlayer?.pause()
-      return
-    }
-
     // If 2-hour inactivity period has expired, do not keep awake
     if Date().timeIntervalSince(lastActivityDate) >= maxInactivityDuration {
       print("[AppDelegate] ⏱️ Skipping keep-alive: 2-hour inactivity window elapsed.")
       silentAudioPlayer?.pause()
-      keepAliveNetworkPlayer?.pause()
       return
     }
 
@@ -271,42 +253,20 @@ import UserNotifications
       let audioSession = AVAudioSession.sharedInstance()
       if audioSession.category == .playAndRecord {
         print("[AppDelegate] AudioSession is currently active for call (.playAndRecord). Preserving call audio.")
-        silentAudioPlayer?.pause()
-        keepAliveNetworkPlayer?.pause()
         return
       }
-      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
+      try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
       try audioSession.setActive(true)
 
       UIApplication.shared.beginReceivingRemoteControlEvents()
 
-      // 1. Live Network Audio Stream: Pulls low-bitrate 8kHz silence over Wi-Fi
-      // Forces iOS kernel/powerd to retain Wi-Fi network interface awake in pocket
-      let cleanIp = currentHostIp.trimmingCharacters(in: .whitespacesAndNewlines)
-      if !cleanIp.isEmpty, let streamUrl = URL(string: "http://\(cleanIp):\(currentHostPort)/api/stream/silence") {
-        if keepAliveNetworkPlayer == nil {
-          let asset = AVURLAsset(url: streamUrl, options: ["AVURLAssetHTTPHeaderFieldsKey": ["Connection": "keep-alive"]])
-          let item = AVPlayerItem(asset: asset)
-          // 60-second forward buffer for "burst-and-sleep" power efficiency
-          item.preferredForwardBufferDuration = 60.0
-          item.automaticallyPreservesTimeOffsetFromLive = true
-          keepAliveNetworkPlayer = AVPlayer(playerItem: item)
-          keepAliveNetworkPlayer?.volume = 0.01
-          keepAliveNetworkPlayer?.automaticallyWaitsToMinimizeStalling = true
-        }
-        if keepAliveNetworkPlayer?.timeControlStatus != .playing {
-          keepAliveNetworkPlayer?.play()
-          print("[AppDelegate] 📡 Live network audio keep-alive streaming from \(streamUrl.absoluteString) (Wi-Fi retention active).")
-        }
-      }
-
-      // 2. Local synthetic fallback player (guarantees active audio session if network momentarily reconnects)
+      // Local synthetic fallback player (guarantees iOS mediaserverd maintains app execution indefinitely)
       if silentAudioPlayer == nil {
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
         silentAudioPlayer?.delegate = self
         silentAudioPlayer?.numberOfLoops = -1
-        silentAudioPlayer?.volume = 0.01
+        silentAudioPlayer?.volume = 0.02
         silentAudioPlayer?.prepareToPlay()
       }
 
@@ -489,23 +449,8 @@ import UserNotifications
             result(false)
           }
         } else if call.method == "pingKeepAlive" {
-          if let args = call.arguments as? [String: Any] {
-            var needsPlayerRefresh = false
-            if let ip = args["hostIp"] as? String, !ip.isEmpty, ip != self?.currentHostIp {
-              self?.currentHostIp = ip
-              needsPlayerRefresh = true
-            }
-            if let port = args["hostPort"] as? Int, port > 0, port != self?.currentHostPort {
-              self?.currentHostPort = port
-              needsPlayerRefresh = true
-            }
-            if needsPlayerRefresh {
-              self?.keepAliveNetworkPlayer?.pause()
-              self?.keepAliveNetworkPlayer = nil
-              self?.ensureKeepAlivePlaying()
-            }
-          }
           self?.resetInactivityTimer()
+          self?.ensureKeepAlivePlaying()
           result(true)
         } else if call.method == "setCallActive" {
           let active = call.arguments as? Bool ?? false

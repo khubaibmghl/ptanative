@@ -276,8 +276,8 @@ class RelayServer {
       }
     }
 
-    // High-priority local UDP burst for call rings and SMS (survives screen-lock & dry hotspot)
-    if (msg.type == 'RINGING' || msg.type == 'INCOMING_RING' || msg.type == 'CALL_DISCONNECTED' || msg.type == 'SMS_RECEIVED') {
+    // High-priority local UDP burst for call rings, dialing, connects, disconnects, and SMS (survives screen-lock & dry hotspot)
+    if (msg.type == 'RINGING' || msg.type == 'INCOMING_RING' || msg.type == 'CALL_DIALING' || msg.type == 'CALL_ACTIVE' || msg.type == 'CALL_DISCONNECTED' || msg.type == 'SMS_RECEIVED') {
       broadcastUdpBurst(msg);
     }
 

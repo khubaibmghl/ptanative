@@ -521,21 +521,21 @@ class RelayClient {
 
   void _startPingHeartbeat() {
     _pingTimer?.cancel();
-    _pingTimer = Timer.periodic(const Duration(seconds: 20), (_) {
+    _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
-        // In background/screen locked, allow up to 300s (5 mins) before watchdog teardown to prevent false disconnects
-        final maxWatchdogTimeout = isAppPaused ? 300000 : 60000;
+        // Watchdog: 35s timeout ensures broken Wi-Fi sockets are detected and reconnected quickly
+        final maxWatchdogTimeout = isAppPaused ? 40000 : 35000;
         if (elapsedSincePong > maxWatchdogTimeout) {
           logDiagnostic('Ping watchdog timeout (>${maxWatchdogTimeout ~/ 1000}s no response). Disconnecting to trigger instant reconnect.');
           disconnect();
           connect();
           return;
         }
-        // Send PING if no packets were received from the host:
-        // In foreground: every 15s. In background: every 75s (reduces CPU wakeups by 80% to save battery).
-        final pingThreshold = isAppPaused ? 75000 : 15000;
+        // Send PING if no packets were received from host in last 10 seconds:
+        // Frequent pinging keeps the iOS Wi-Fi interface awake and prevents router power-save disconnects!
+        const pingThreshold = 10000;
         if (now - _lastPongTime >= pingThreshold) {
           try {
             _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
@@ -574,7 +574,7 @@ class RelayClient {
     if (!_isConnected || _channel == null) {
       logDiagnostic('Instant wake reconnecting directly to host $hostIp...');
       connect();
-      Future.delayed(const Duration(milliseconds: 2000), () {
+      Future.delayed(const Duration(milliseconds: 1500), () {
         if (!_isConnected) {
           discoverHostIp().then((discovered) {
             if (!_isConnected && discovered != null && discovered.isNotEmpty) {
@@ -602,9 +602,8 @@ class RelayClient {
 
   void _startReconnectLoop() {
     _reconnectTimer?.cancel();
-    // In background, relax reconnect polling to 15s instead of 3s to conserve CPU & Wi-Fi power
-    final pollInterval = isAppPaused ? const Duration(seconds: 15) : const Duration(seconds: 3);
-    _reconnectTimer = Timer.periodic(pollInterval, (timer) async {
+    // Fast reconnect interval (3 seconds) ensures that any momentary Wi-Fi disruption is recovered immediately
+    _reconnectTimer = Timer.periodic(const Duration(seconds: 3), (timer) async {
       if (_isConnected) {
         logDiagnostic('✅ Devices connected: stopping background search.');
         timer.cancel();
@@ -798,10 +797,12 @@ class RelayClient {
         case 'CALL_ACTIVE':
           final number = msg.data['number'] as String? ?? '';
           final isAnswered = msg.data['isAnswered'] as bool? ?? (msg.data['startTime'] != null && (msg.data['startTime'] as int) > 0);
-          final startTimeRaw = msg.data['startTime'] as int? ?? 0;
-          final startTimeMs = (isAnswered && startTimeRaw > 0)
-              ? (startTimeRaw < 100000000000 ? startTimeRaw * 1000 : startTimeRaw)
-              : DateTime.now().millisecondsSinceEpoch;
+          
+          // Anchor active call start time to iPhone's local clock to eliminate multi-second clock skew between devices
+          final localNow = DateTime.now().millisecondsSinceEpoch;
+          final startTimeMs = (currentActiveCall != null && currentActiveCall!.state == PhoneCallState.connected && currentActiveCall!.startTime > 0)
+              ? currentActiveCall!.startTime
+              : localNow;
 
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           final bool wasIncomingCall = currentActiveCall?.isIncoming ?? false;
@@ -838,11 +839,19 @@ class RelayClient {
         case 'CALL_TICK':
           final dur = msg.data['duration'] as int? ?? 0;
           if (currentActiveCall != null) {
+            int adjustedStartTime = currentActiveCall!.startTime;
+            if (dur > 0) {
+              final tickLocalNow = DateTime.now().millisecondsSinceEpoch;
+              final currentLocalElapsed = adjustedStartTime > 0 ? (tickLocalNow - adjustedStartTime) ~/ 1000 : 0;
+              if (adjustedStartTime == 0 || (currentLocalElapsed - dur).abs() >= 2) {
+                adjustedStartTime = tickLocalNow - (dur * 1000);
+              }
+            }
             currentActiveCall = ActiveCallInfo(
               number: currentActiveCall!.number,
               callerName: currentActiveCall!.callerName,
               label: currentActiveCall!.label,
-              startTime: currentActiveCall!.startTime,
+              startTime: adjustedStartTime,
               durationSeconds: dur,
               isIncoming: currentActiveCall!.isIncoming,
               state: PhoneCallState.connected,

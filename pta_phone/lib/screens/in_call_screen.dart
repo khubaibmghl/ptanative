@@ -28,6 +28,7 @@ class InCallScreen extends StatefulWidget {
 class _InCallScreenState extends State<InCallScreen> {
   Timer? _timer;
   int _elapsedSeconds = 0;
+  int? _localCallStartTimeMs;
   bool _isMuted = false;
   bool _isSpeaker = false;
   String? _contactId;
@@ -35,7 +36,7 @@ class _InCallScreenState extends State<InCallScreen> {
   @override
   void initState() {
     super.initState();
-    _startTimerIfNeeded();
+    _initCallTimer();
     _lookupContact();
   }
 
@@ -52,48 +53,53 @@ class _InCallScreenState extends State<InCallScreen> {
   void didUpdateWidget(covariant InCallScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.callInfo.state != oldWidget.callInfo.state) {
-      _startTimerIfNeeded();
-    } else if (widget.callInfo.durationSeconds > 0 && (widget.callInfo.durationSeconds - _elapsedSeconds).abs() > 3) {
-      setState(() {
-        _elapsedSeconds = widget.callInfo.durationSeconds;
-      });
+      _initCallTimer();
+    } else if (widget.callInfo.state == PhoneCallState.connected && widget.callInfo.durationSeconds > 0) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      final drift = (widget.callInfo.durationSeconds - _elapsedSeconds).abs();
+      if (drift >= 2) {
+        _localCallStartTimeMs = now - (widget.callInfo.durationSeconds * 1000);
+        setState(() {
+          _elapsedSeconds = widget.callInfo.durationSeconds;
+        });
+      }
     }
   }
 
-  void _startTimerIfNeeded() {
+  void _initCallTimer() {
     _timer?.cancel();
     if (widget.callInfo.state == PhoneCallState.connected) {
-      if (widget.callInfo.startTime > 0) {
-        final now = DateTime.now().millisecondsSinceEpoch;
-        final computed = (now - widget.callInfo.startTime) ~/ 1000;
-        _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : widget.callInfo.durationSeconds;
-      } else if (widget.callInfo.durationSeconds > 0) {
+      final now = DateTime.now().millisecondsSinceEpoch;
+      if (widget.callInfo.durationSeconds > 0) {
+        _localCallStartTimeMs = now - (widget.callInfo.durationSeconds * 1000);
         _elapsedSeconds = widget.callInfo.durationSeconds;
+      } else if (widget.callInfo.startTime > 0 && widget.callInfo.startTime <= now) {
+        _localCallStartTimeMs = widget.callInfo.startTime;
+        _elapsedSeconds = (now - _localCallStartTimeMs!) ~/ 1000;
       } else {
+        _localCallStartTimeMs = now;
         _elapsedSeconds = 0;
       }
 
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {
+          final curNow = DateTime.now().millisecondsSinceEpoch;
+          final sec = _localCallStartTimeMs != null
+              ? ((curNow - _localCallStartTimeMs!) ~/ 1000)
+              : (_elapsedSeconds + 1);
           setState(() {
-            if (widget.callInfo.startTime > 0) {
-              final now = DateTime.now().millisecondsSinceEpoch;
-              final computed = (now - widget.callInfo.startTime) ~/ 1000;
-              _elapsedSeconds = (computed >= 0 && computed < 86400) ? computed : _elapsedSeconds + 1;
-            } else {
-              _elapsedSeconds++;
-            }
+            _elapsedSeconds = sec >= 0 ? sec : 0;
           });
         }
       });
     } else if (widget.callInfo.state == PhoneCallState.disconnected) {
-      // Freeze timer on disconnect
       _timer?.cancel();
       if (widget.callInfo.durationSeconds > 0) {
         _elapsedSeconds = widget.callInfo.durationSeconds;
       }
     } else {
-      // Dialing or Ringing: timer stays 0
+      _timer?.cancel();
+      _localCallStartTimeMs = null;
       _elapsedSeconds = 0;
     }
   }
