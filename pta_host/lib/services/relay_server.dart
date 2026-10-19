@@ -291,16 +291,8 @@ class RelayServer {
       }
     }
 
-    // Auto-manage WebRTC Voice Tunnel on call events
-    if (msg.type == 'CALL_ACTIVE') {
-      debugPrint('[VOICE_TUNNEL] Active call confirmed. Starting WebRTC voice tunnel on host...');
-      voiceTunnel.startVoiceTunnel(
-        isCaller: false,
-        sendSignaling: (sMsg) => broadcast(sMsg),
-        logCallback: (txt) => debugPrint('[HOST_WEBRTC] $txt'),
-      );
-    } else if (msg.type == 'CALL_DISCONNECTED') {
-      debugPrint('[VOICE_TUNNEL] Call disconnected. Teardown WebRTC voice tunnel on host...');
+    // WebRTC Voice Tunnel management (cellular voice audio is handled natively by Vivo S1/AirPods)
+    if (msg.type == 'CALL_DISCONNECTED') {
       voiceTunnel.closeVoiceTunnel();
     }
   }

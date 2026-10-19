@@ -560,6 +560,12 @@ class RelayClient {
     } catch (_) {}
   }
 
+  void _setNativeCallActive(bool active) {
+    try {
+      const MethodChannel('com.pta.phone/native_intents').invokeMethod('setCallActive', active);
+    } catch (_) {}
+  }
+
   void onAppResumed() {
     isAppPaused = false;
     logDiagnostic('App Resumed from screen lock/background');
@@ -822,15 +828,10 @@ class RelayClient {
 
           if (isAnswered) {
             isAnsweringOrActive = true;
+            _setNativeCallActive(true);
             // Inform Apple CallKit CXProvider that the call has connected (CXCallConnected)
-            // NEVER call endAllCalls(): an answered call is live!
             await CallKitService.instance.setCallConnected();
-            logDiagnostic('🎙️ Active cellular call established -> Starting lossless WebRTC Voice Tunnel');
-            voiceTunnel.startVoiceTunnel(
-              isCaller: !wasIncomingCall,
-              sendSignaling: (sMsg) => _sendRawMessage(sMsg),
-              logCallback: (txt) => logDiagnostic('[WEBRTC] $txt'),
-            );
+            logDiagnostic('🎙️ Active cellular call established on Vivo S1');
           }
           break;
 
@@ -852,6 +853,7 @@ class RelayClient {
 
         case 'CALL_DISCONNECTED':
           isAnsweringOrActive = false;
+          _setNativeCallActive(false);
           voiceTunnel.closeVoiceTunnel();
           final number = msg.data['number'] as String? ?? (currentActiveCall?.number ?? 'Unknown');
           final duration = msg.data['duration'] as int? ?? 0;
@@ -977,6 +979,7 @@ class RelayClient {
       state: PhoneCallState.dialing,
     );
     _activeCallController.add(currentActiveCall);
+    _setNativeCallActive(true);
 
     try {
       await CallKitService.instance.startCall(
@@ -1005,15 +1008,21 @@ class RelayClient {
 
   Future<bool> answerCall() async {
     isAnsweringOrActive = true;
+    _setNativeCallActive(true);
     await CallKitService.instance.setCallConnected();
+
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (currentActiveCall != null) {
+      currentActiveCall = currentActiveCall!.copyWith(
+        state: PhoneCallState.connected,
+        startTime: currentActiveCall!.startTime > 0 ? currentActiveCall!.startTime : now,
+      );
+      _activeCallController.add(currentActiveCall);
+    }
+
     if (_isConnected && _channel != null) {
       try {
         _sendRawMessage(RelayMessage.actionAnswer());
-        voiceTunnel.startVoiceTunnel(
-          isCaller: false,
-          sendSignaling: (sMsg) => _sendRawMessage(sMsg),
-          logCallback: (txt) => logDiagnostic('[WEBRTC] $txt'),
-        );
         return true;
       } catch (_) {}
     }
@@ -1035,6 +1044,7 @@ class RelayClient {
     }
     _lastHangupTimestamp = now;
     isAnsweringOrActive = false;
+    _setNativeCallActive(false);
 
     voiceTunnel.closeVoiceTunnel();
     await CallKitService.instance.endAllCalls();

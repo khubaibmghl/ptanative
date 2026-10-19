@@ -23,6 +23,7 @@ import UserNotifications
   private var keepAliveNetworkPlayer: AVPlayer?
   private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.43.1"
   private var currentHostPort: Int = UserDefaults.standard.integer(forKey: "flutter.host_port") == 0 ? 8080 : UserDefaults.standard.integer(forKey: "flutter.host_port")
+  private var isCallActive: Bool = false
 
   override func application(
     _ application: UIApplication,
@@ -173,14 +174,18 @@ import UserNotifications
 
     if type == .ended {
       print("[AppDelegate] Audio Interruption Ended -> Resuming background keep-alive...")
-      ensureKeepAlivePlaying()
+      if !isCallActive {
+        ensureKeepAlivePlaying()
+      }
     }
   }
 
   @objc private func handleMediaServicesReset(_ notification: Notification) {
     print("[AppDelegate] Media Services Were Reset -> Recreating audio keep-alive player...")
     silentAudioPlayer = nil
-    ensureKeepAlivePlaying()
+    if !isCallActive {
+      ensureKeepAlivePlaying()
+    }
   }
 
   @objc private func handleMediaServicesLost(_ notification: Notification) {
@@ -188,7 +193,7 @@ import UserNotifications
   }
 
   func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
-    if player == silentAudioPlayer {
+    if player == silentAudioPlayer && !isCallActive {
       print("[AppDelegate] Silent keep-alive player finished. Looping...")
       silentAudioPlayer?.play()
     }
@@ -196,15 +201,18 @@ import UserNotifications
 
   func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
     if player == silentAudioPlayer {
-      print("[AppDelegate] Silent keep-alive player decode error: \(String(describing: error)). Recreating...")
+      print("[AppDelegate] Silent keep-alive player decode error: \(String(describing: error)).")
       silentAudioPlayer = nil
-      ensureKeepAlivePlaying()
+      DispatchQueue.main.asyncAfter(deadline: .now() + 3.0) { [weak self] in
+        guard let self = self, !self.isCallActive else { return }
+        self.ensureKeepAlivePlaying()
+      }
     }
   }
 
   func resetInactivityTimer() {
     lastActivityDate = Date()
-    if silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false {
+    if !isCallActive && (silentAudioPlayer == nil || silentAudioPlayer?.isPlaying == false) {
       ensureKeepAlivePlaying()
     }
   }
@@ -224,12 +232,33 @@ import UserNotifications
         silentAudioPlayer?.pause()
         keepAliveNetworkPlayer?.pause()
       }
+    } else if !isCallActive {
+      ensureKeepAlivePlaying()
+    }
+  }
+
+  func setCallActiveState(_ active: Bool) {
+    isCallActive = active
+    if active {
+      print("[AppDelegate] 📞 Call is now active. Pausing keep-alive players to release audio hardware.")
+      silentAudioPlayer?.pause()
+      keepAliveNetworkPlayer?.pause()
     } else {
+      print("[AppDelegate] 📞 Call disconnected. Resuming keep-alive players.")
+      resetInactivityTimer()
       ensureKeepAlivePlaying()
     }
   }
 
   func ensureKeepAlivePlaying() {
+    // If a call is currently active, release all audio hardware immediately
+    if isCallActive {
+      print("[AppDelegate] 📞 Skipping keep-alive: Call is currently active.")
+      silentAudioPlayer?.pause()
+      keepAliveNetworkPlayer?.pause()
+      return
+    }
+
     // If 2-hour inactivity period has expired, do not keep awake
     if Date().timeIntervalSince(lastActivityDate) >= maxInactivityDuration {
       print("[AppDelegate] ⏱️ Skipping keep-alive: 2-hour inactivity window elapsed.")
@@ -242,6 +271,8 @@ import UserNotifications
       let audioSession = AVAudioSession.sharedInstance()
       if audioSession.category == .playAndRecord {
         print("[AppDelegate] AudioSession is currently active for call (.playAndRecord). Preserving call audio.")
+        silentAudioPlayer?.pause()
+        keepAliveNetworkPlayer?.pause()
         return
       }
       try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetooth, .allowBluetoothA2DP])
@@ -475,6 +506,10 @@ import UserNotifications
             }
           }
           self?.resetInactivityTimer()
+          result(true)
+        } else if call.method == "setCallActive" {
+          let active = call.arguments as? Bool ?? false
+          self?.setCallActiveState(active)
           result(true)
         } else {
           result(FlutterMethodNotImplemented)
