@@ -390,7 +390,10 @@ class DatabaseHelper {
     } catch (_) {}
   }
 
-  Future<List<CallLogModel>> getCallLogs({bool missedOnly = false}) async {
+  /// Fetches stored call logs from iPhone SQLite database.
+  /// Note: Once call logs are shifted/synced to the iPhone, they are permanently
+  /// retained and never purged on the basis of age.
+  Future<List<CallLogModel>> getCallLogs({bool missedOnly = false, int? limit}) async {
     await cleanDuplicateCallLogs();
     final db = await database;
     final List<Map<String, dynamic>> rows;
@@ -401,13 +404,13 @@ class DatabaseHelper {
         where: 'call_type = ?',
         whereArgs: ['missed'],
         orderBy: 'timestamp DESC',
-        limit: 100,
+        limit: limit,
       );
     } else {
       rows = await db.query(
         'call_logs',
         orderBy: 'timestamp DESC',
-        limit: 100,
+        limit: limit,
       );
     }
 

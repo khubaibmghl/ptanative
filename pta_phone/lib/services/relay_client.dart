@@ -1179,10 +1179,10 @@ class RelayClient {
     } catch (_) {}
   }
 
-  Future<void> fetchHistory() async {
+  Future<void> fetchHistory({int days = 60}) async {
     try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/history');
-      final res = await http.get(uri).timeout(const Duration(seconds: 3));
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/history?days=$days');
+      final res = await http.get(uri).timeout(const Duration(seconds: 8));
       if (res.statusCode == 200) {
         final List<dynamic> list = jsonDecode(res.body);
         for (final item in list) {

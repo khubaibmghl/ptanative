@@ -20,10 +20,10 @@ class AndroidContentService {
     try {
       await _requestPermissions();
       await fetchContacts();
-      await fetchCallHistory();
+      await fetchCallHistory(days: 60);
       server.logEvent(
         'Content Synced',
-        'Loaded ${server.cachedContacts.length} contacts & ${server.cachedCallHistory.length} call logs',
+        'Loaded ${server.cachedContacts.length} contacts & ${server.cachedCallHistory.length} call logs (last 60 days)',
         ActivityType.success,
       );
     } catch (e) {
@@ -81,20 +81,31 @@ class AndroidContentService {
     }
   }
 
-  Future<List<CallLogModel>> fetchCallHistory() async {
+  Future<List<CallLogModel>> fetchCallHistory({int days = 60}) async {
     try {
       final status = await Permission.phone.status;
       if (!status.isGranted) {
         await Permission.phone.request();
       }
 
-      final Iterable<cl.CallLogEntry> entries = await cl.CallLog.get();
+      final sixtyDaysAgo = DateTime.now().subtract(Duration(days: days)).millisecondsSinceEpoch;
+      Iterable<cl.CallLogEntry> entries;
+      try {
+        entries = await cl.CallLog.query(dateFrom: sixtyDaysAgo);
+      } catch (e) {
+        debugPrint('[CONTENT SERVICE] cl.CallLog.query error, falling back to cl.CallLog.get(): $e');
+        entries = await cl.CallLog.get();
+      }
+
       final List<CallLogModel> result = [];
 
       int idCounter = 1;
-      for (final entry in entries.take(100)) {
+      for (final entry in entries) {
         final number = entry.number ?? 'Unknown';
         if (number.trim().isEmpty) continue;
+
+        final ts = entry.timestamp ?? DateTime.now().millisecondsSinceEpoch;
+        if (ts < sixtyDaysAgo) continue;
 
         CallType cType = CallType.incoming;
         if (entry.callType == cl.CallType.outgoing) {
@@ -110,13 +121,16 @@ class AndroidContentService {
           callType: cType,
           serviceType: ServiceType.zongGsm,
           durationSeconds: entry.duration ?? 0,
-          timestamp: entry.timestamp ?? DateTime.now().millisecondsSinceEpoch,
+          timestamp: ts,
         );
         result.add(model);
       }
 
+      // Sort newest to oldest
+      result.sort((a, b) => b.timestamp.compareTo(a.timestamp));
+
       server.cachedCallHistory = result;
-      debugPrint('[CONTENT SERVICE] Fetched ${result.length} native call log entries');
+      debugPrint('[CONTENT SERVICE] Fetched ${result.length} native call log entries (last $days days)');
       return result;
     } catch (e) {
       debugPrint('[CONTENT SERVICE] Call log fetch error: $e');

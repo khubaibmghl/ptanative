@@ -499,7 +499,9 @@ class RelayServer {
     // 6. History
   if (path == 'api/history') {
     if (contentService != null) {
-      await contentService!.fetchCallHistory();
+      final daysStr = request.url.queryParameters['days'] ?? '60';
+      final days = int.tryParse(daysStr) ?? 60;
+      await contentService!.fetchCallHistory(days: days);
     }
     final list = cachedCallHistory.map((c) => c.toJson()).toList();
     return Response.ok(jsonEncode(list), headers: {'content-type': 'application/json'});
