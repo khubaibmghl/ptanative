@@ -1,5 +1,37 @@
 import 'dart:convert';
 
+class SimCardInfo {
+  final int slotIndex; // 0 for SIM 1, 1 for SIM 2
+  final int subId;
+  final String displayName;
+  final String carrierName;
+
+  SimCardInfo({
+    required this.slotIndex,
+    required this.subId,
+    required this.displayName,
+    required this.carrierName,
+  });
+
+  factory SimCardInfo.fromJson(Map<String, dynamic> json) {
+    return SimCardInfo(
+      slotIndex: json['slotIndex'] as int? ?? 0,
+      subId: json['subId'] as int? ?? -1,
+      displayName: json['displayName'] as String? ?? 'SIM',
+      carrierName: json['carrierName'] as String? ?? '',
+    );
+  }
+
+  Map<String, dynamic> toJson() {
+    return {
+      'slotIndex': slotIndex,
+      'subId': subId,
+      'displayName': displayName,
+      'carrierName': carrierName,
+    };
+  }
+}
+
 class DeviceStatusModel {
   final int batteryLevel; // 0 - 100
   final bool isCharging;
@@ -7,6 +39,10 @@ class DeviceStatusModel {
   final String networkType; // e.g. 'Zong 4G • VoLTE'
   final bool isAdbConnected;
   final bool isAirPodsConnected;
+  final bool isMobileDataEnabled;
+  final int activeDataSlot; // 0 for SIM 1, 1 for SIM 2
+  final int activeDataSubId;
+  final List<SimCardInfo> sims;
 
   DeviceStatusModel({
     required this.batteryLevel,
@@ -15,9 +51,14 @@ class DeviceStatusModel {
     required this.networkType,
     required this.isAdbConnected,
     required this.isAirPodsConnected,
+    this.isMobileDataEnabled = false,
+    this.activeDataSlot = 0,
+    this.activeDataSubId = -1,
+    this.sims = const [],
   });
 
   factory DeviceStatusModel.fromJson(Map<String, dynamic> json) {
+    final rawSims = json['sims'] as List<dynamic>? ?? [];
     return DeviceStatusModel(
       batteryLevel: json['batteryLevel'] as int? ?? 100,
       isCharging: json['isCharging'] as bool? ?? false,
@@ -25,6 +66,10 @@ class DeviceStatusModel {
       networkType: json['networkType'] as String? ?? 'Zong 4G • VoLTE',
       isAdbConnected: json['isAdbConnected'] as bool? ?? false,
       isAirPodsConnected: json['isAirPodsConnected'] as bool? ?? false,
+      isMobileDataEnabled: json['isMobileDataEnabled'] as bool? ?? false,
+      activeDataSlot: json['activeDataSlot'] as int? ?? 0,
+      activeDataSubId: json['activeDataSubId'] as int? ?? -1,
+      sims: rawSims.map((s) => SimCardInfo.fromJson(Map<String, dynamic>.from(s))).toList(),
     );
   }
 
@@ -36,6 +81,10 @@ class DeviceStatusModel {
       'networkType': networkType,
       'isAdbConnected': isAdbConnected,
       'isAirPodsConnected': isAirPodsConnected,
+      'isMobileDataEnabled': isMobileDataEnabled,
+      'activeDataSlot': activeDataSlot,
+      'activeDataSubId': activeDataSubId,
+      'sims': sims.map((s) => s.toJson()).toList(),
     };
   }
 }
@@ -140,6 +189,23 @@ class RelayMessage {
     return RelayMessage(
       type: 'ACTION_DTMF',
       data: {'digit': digit},
+    );
+  }
+
+  static RelayMessage actionSetMobileData(bool enabled) {
+    return RelayMessage(
+      type: 'ACTION_SET_MOBILE_DATA',
+      data: {'enabled': enabled},
+    );
+  }
+
+  static RelayMessage actionSetDataSim({required int slotIndex, required int subId}) {
+    return RelayMessage(
+      type: 'ACTION_SET_DATA_SIM',
+      data: {
+        'slotIndex': slotIndex,
+        'subId': subId,
+      },
     );
   }
 

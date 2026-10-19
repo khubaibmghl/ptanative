@@ -1,3 +1,4 @@
+import 'dart:async';
 import 'dart:io';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart';
@@ -234,5 +235,141 @@ class TelephonyController {
       debugPrint('[TELEPHONY] sendDtmf error: $e');
       return false;
     }
+  }
+
+  /// Executes a shell command with elevated uid 2000 (shell) privileges
+  /// via the persistent local shell socket on port 8089 or via local adb
+  Future<String> executePrivilegedShell(String command) async {
+    // 1. Try local shell socket on 127.0.0.1:8089
+    try {
+      final socket = await Socket.connect('127.0.0.1', 8089, timeout: const Duration(milliseconds: 600));
+      final completer = Completer<String>();
+      final buffer = StringBuffer();
+
+      socket.listen(
+        (data) {
+          buffer.write(String.fromCharCodes(data));
+        },
+        onDone: () {
+          if (!completer.isCompleted) completer.complete(buffer.toString().trim());
+        },
+        onError: (_) {
+          if (!completer.isCompleted) completer.complete(buffer.toString().trim());
+        },
+      );
+
+      socket.write('$command\nexit\n');
+      await socket.flush();
+
+      final res = await completer.future.timeout(const Duration(seconds: 2), onTimeout: () {
+        socket.destroy();
+        return buffer.toString().trim();
+      });
+      socket.destroy();
+      return res;
+    } catch (_) {}
+
+    // 2. Try adb process if available
+    try {
+      if (isAdbConnected) {
+        final res = await Process.run('adb', ['-s', adbDeviceId, 'shell', command]);
+        return res.stdout.toString().trim();
+      }
+    } catch (_) {}
+
+    // 3. Fallback direct Process.run
+    try {
+      final parts = command.split(' ');
+      final bin = parts.first;
+      final args = parts.skip(1).toList();
+      final res = await Process.run(bin, args);
+      return res.stdout.toString().trim();
+    } catch (_) {}
+
+    return '';
+  }
+
+  /// Sets mobile data enabled or disabled on Vivo S1
+  Future<bool> setMobileData(bool enabled) async {
+    debugPrint('[TELEPHONY] Setting mobile data: $enabled');
+    final val = enabled ? '1' : '0';
+    final action = enabled ? 'enable' : 'disable';
+    final cmd = 'cmd phone data $action; svc data $action; settings put global mobile_data $val; settings put global mobile_data1 $val; settings put global mobile_data2 $val';
+    await executePrivilegedShell(cmd);
+    final verify = await executePrivilegedShell('settings get global mobile_data');
+    return verify.trim() == val || verify.trim().endsWith(val);
+  }
+
+  /// Sets the active default mobile data SIM subscription on Vivo S1
+  Future<bool> setDataSim(int subId) async {
+    debugPrint('[TELEPHONY] Setting data SIM subId: $subId');
+    final cmd = 'service call isub 33 i32 $subId; settings put global user_preferred_data_sub $subId; settings put global multi_sim_data_call $subId';
+    await executePrivilegedShell(cmd);
+    final verify = await executePrivilegedShell('settings get global multi_sim_data_call');
+    return verify.trim() == subId.toString();
+  }
+
+  /// Retrieves real-time cellular data state and SIM card configuration
+  Future<Map<String, dynamic>> getTelephonyDataStatus() async {
+    bool isDataEnabled = false;
+    int activeSubId = -1;
+    int activeSlot = 0;
+    List<Map<String, dynamic>> sims = [];
+
+    try {
+      final output = await executePrivilegedShell('dumpsys isub; settings get global mobile_data');
+
+      // Check mobile data status from trailing output lines
+      final lines = output.split('\n');
+      for (final line in lines) {
+        final trimmed = line.trim();
+        if (trimmed == '1') {
+          isDataEnabled = true;
+        } else if (trimmed == '0') {
+          isDataEnabled = false;
+        }
+      }
+
+      // Parse defaultDataSubId
+      final subMatch = RegExp(r'defaultDataSubId=(\d+)').firstMatch(output);
+      if (subMatch != null) {
+        activeSubId = int.tryParse(subMatch.group(1)!) ?? -1;
+      }
+
+      // Parse ActiveSubInfoList
+      final reg = RegExp(r'\{id=(\d+)\s+iccId=.*?simSlotIndex=(\d+).*?displayName=([^,\s}]+).*?carrierName=([^,\s}]+)');
+      for (final match in reg.allMatches(output)) {
+        final id = int.tryParse(match.group(1)!) ?? -1;
+        final slot = int.tryParse(match.group(2)!) ?? 0;
+        final name = match.group(3) ?? 'SIM ${slot + 1}';
+        final carrier = match.group(4) ?? '';
+        sims.add({
+          'subId': id,
+          'slotIndex': slot,
+          'displayName': name,
+          'carrierName': carrier,
+        });
+        if (id == activeSubId) {
+          activeSlot = slot;
+        }
+      }
+    } catch (_) {}
+
+    // Fallback if parsing was empty
+    if (sims.isEmpty) {
+      sims = [
+        {'subId': 6, 'slotIndex': 0, 'displayName': 'SIM1', 'carrierName': 'ZONG'},
+        {'subId': 2, 'slotIndex': 1, 'displayName': 'SIM2', 'carrierName': 'Ufone'},
+      ];
+      if (activeSubId == -1) activeSubId = 2;
+      activeSlot = (activeSubId == 6) ? 0 : 1;
+    }
+
+    return {
+      'isMobileDataEnabled': isDataEnabled,
+      'activeDataSubId': activeSubId,
+      'activeDataSlot': activeSlot,
+      'sims': sims,
+    };
   }
 }

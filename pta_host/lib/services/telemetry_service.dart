@@ -75,6 +75,13 @@ class TelemetryService {
     _lastBroadcastNetwork = activeNetworkLabel;
     _lastBroadcastTime = now;
 
+    final dataStatus = await server.telephonyController.getTelephonyDataStatus();
+    final isMobileDataEnabled = dataStatus['isMobileDataEnabled'] as bool? ?? false;
+    final activeDataSlot = dataStatus['activeDataSlot'] as int? ?? 0;
+    final activeDataSubId = dataStatus['activeDataSubId'] as int? ?? -1;
+    final rawSims = dataStatus['sims'] as List<dynamic>? ?? [];
+    final sims = rawSims.map((s) => SimCardInfo.fromJson(Map<String, dynamic>.from(s))).toList();
+
     final status = DeviceStatusModel(
       batteryLevel: batteryLevel,
       isCharging: isCharging,
@@ -82,6 +89,10 @@ class TelemetryService {
       networkType: 'Zong 4G • VoLTE',
       isAdbConnected: server.telephonyController.isAdbConnected,
       isAirPodsConnected: true,
+      isMobileDataEnabled: isMobileDataEnabled,
+      activeDataSlot: activeDataSlot,
+      activeDataSubId: activeDataSubId,
+      sims: sims,
     );
 
     server.broadcast(RelayMessage(

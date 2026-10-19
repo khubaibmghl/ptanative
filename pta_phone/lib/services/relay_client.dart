@@ -1138,6 +1138,52 @@ class RelayClient {
     }
   }
 
+  /// Remotely controls mobile data connection on Vivo host (ON / OFF)
+  Future<bool> setMobileData(bool enabled) async {
+    logDiagnostic('📶 Remote Mobile Data command: ${enabled ? "ENABLE" : "DISABLE"}');
+
+    // 1. WebSocket Priority
+    if (_isConnected && _channel != null) {
+      try {
+        _sendRawMessage(RelayMessage.actionSetMobileData(enabled));
+        return true;
+      } catch (_) {}
+    }
+
+    // 2. REST Fallback
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/data/toggle?enabled=$enabled');
+      final res = await http.get(uri).timeout(const Duration(seconds: 4));
+      return res.statusCode == 200;
+    } catch (e) {
+      logDiagnostic('REST setMobileData error: $e');
+      return false;
+    }
+  }
+
+  /// Remotely switches active data connection between SIM 1 and SIM 2
+  Future<bool> setDataSim({required int slotIndex, required int subId}) async {
+    logDiagnostic('🔄 Remote Data SIM Switch to Slot $slotIndex (SubId $subId)');
+
+    // 1. WebSocket Priority
+    if (_isConnected && _channel != null) {
+      try {
+        _sendRawMessage(RelayMessage.actionSetDataSim(slotIndex: slotIndex, subId: subId));
+        return true;
+      } catch (_) {}
+    }
+
+    // 2. REST Fallback
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/data/sim?subId=$subId');
+      final res = await http.get(uri).timeout(const Duration(seconds: 4));
+      return res.statusCode == 200;
+    } catch (e) {
+      logDiagnostic('REST setDataSim error: $e');
+      return false;
+    }
+  }
+
   /// Mutes or unmutes local microphone during WebRTC voice session
   void toggleMute(bool muted) {
     voiceTunnel.toggleMute(muted);

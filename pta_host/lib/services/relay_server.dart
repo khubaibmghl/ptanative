@@ -410,6 +410,23 @@ class RelayServer {
             logEvent('SMS Delivery', ok ? 'Dispatched successfully' : 'Failed to send', ok ? ActivityType.success : ActivityType.call);
           });
           break;
+        case 'ACTION_SET_MOBILE_DATA':
+          final enabled = msg.data['enabled'] as bool? ?? false;
+          logEvent('Mobile Data', 'Setting mobile data to ${enabled ? "ON" : "OFF"} from iPhone', ActivityType.info);
+          telephonyController.setMobileData(enabled).then((ok) {
+            telemetryService?.updateAndBroadcast(force: true);
+          });
+          break;
+        case 'ACTION_SET_DATA_SIM':
+          final subId = msg.data['subId'] as int?;
+          final slotIndex = msg.data['slotIndex'] as int? ?? 0;
+          logEvent('Data SIM Switch', 'Switching data SIM to subId $subId (slot $slotIndex) from iPhone', ActivityType.info);
+          if (subId != null) {
+            telephonyController.setDataSim(subId).then((ok) {
+              telemetryService?.updateAndBroadcast(force: true);
+            });
+          }
+          break;
         case 'WEBRTC_OFFER':
         case 'WEBRTC_ANSWER':
         case 'WEBRTC_ICE_CANDIDATE':
@@ -680,6 +697,68 @@ class RelayServer {
       jsonEncode({'success': res}),
       headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
     );
+  }
+
+  // 13. Cellular Mobile Data Toggle via REST
+  if (path == 'api/data/toggle' || path == 'api/data/enable' || path == 'api/data/disable') {
+    try {
+      bool enable = true;
+      if (path == 'api/data/disable') {
+        enable = false;
+      } else if (request.url.queryParameters.containsKey('enabled')) {
+        enable = request.url.queryParameters['enabled'] == 'true' || request.url.queryParameters['enabled'] == '1';
+      } else {
+        try {
+          final bodyStr = await request.readAsString();
+          if (bodyStr.isNotEmpty) {
+            final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+            if (json.containsKey('enabled')) {
+              enable = json['enabled'] == true || json['enabled'] == 'true' || json['enabled'] == 1;
+            }
+          }
+        } catch (_) {}
+      }
+      final ok = await telephonyController.setMobileData(enable);
+      telemetryService?.updateAndBroadcast(force: true);
+      logEvent('Mobile Data', 'Cellular data toggled ${enable ? "ON" : "OFF"} via REST ($ok)', ActivityType.info);
+      return Response.ok(
+        jsonEncode({'status': ok ? 'ok' : 'error', 'enabled': enable}),
+        headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+      );
+    } catch (e) {
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
+  }
+
+  // 14. Cellular Data SIM Switch via REST
+  if (path == 'api/data/sim') {
+    try {
+      int? subId;
+      if (request.url.queryParameters.containsKey('subId')) {
+        subId = int.tryParse(request.url.queryParameters['subId']!);
+      } else {
+        try {
+          final bodyStr = await request.readAsString();
+          if (bodyStr.isNotEmpty) {
+            final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+            subId = json['subId'] as int?;
+          }
+        } catch (_) {}
+      }
+      if (subId != null) {
+        final ok = await telephonyController.setDataSim(subId);
+        telemetryService?.updateAndBroadcast(force: true);
+        logEvent('Data SIM Switch', 'Switched data SIM to subId: $subId via REST ($ok)', ActivityType.info);
+        return Response.ok(
+          jsonEncode({'status': ok ? 'ok' : 'error', 'subId': subId}),
+          headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
+        );
+      } else {
+        return Response.badRequest(body: '{"error":"Missing subId"}', headers: {'content-type': 'application/json'});
+      }
+    } catch (e) {
+      return Response.internalServerError(body: jsonEncode({'error': e.toString()}));
+    }
   }
 
   // 13. Low-Bitrate Silence Stream (Maintains iOS Wi-Fi interface in deep sleep)

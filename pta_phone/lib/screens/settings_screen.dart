@@ -35,6 +35,15 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
   late AnimationController _radarController;
   late AnimationController _syncAnimController;
   StreamSubscription<bool>? _connectionSub;
+  StreamSubscription<DeviceStatusModel>? _statusSub;
+
+  // Optimistic UI state for Cellular Data & Dual SIM
+  bool? _optimisticMobileData;
+  int? _optimisticActiveSlot;
+  int? _optimisticActiveSubId;
+  bool _isSwitchingData = false;
+  bool _isSwitchingSim = false;
+  int? _targetSwitchSubId;
 
   @override
   void initState() {
@@ -66,6 +75,22 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
       }
     });
 
+    _statusSub = RelayClient.instance.statusStream.listen((status) {
+      if (mounted) {
+        setState(() {
+          if (_optimisticMobileData != null && status.isMobileDataEnabled == _optimisticMobileData) {
+            _optimisticMobileData = null;
+          }
+          if (_optimisticActiveSlot != null && status.activeDataSlot == _optimisticActiveSlot) {
+            _optimisticActiveSlot = null;
+          }
+          if (_optimisticActiveSubId != null && status.activeDataSubId == _optimisticActiveSubId) {
+            _optimisticActiveSubId = null;
+          }
+        });
+      }
+    });
+
     _syncAnimController = AnimationController(
       vsync: this,
       duration: const Duration(milliseconds: 900),
@@ -77,6 +102,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
   @override
   void dispose() {
     _connectionSub?.cancel();
+    _statusSub?.cancel();
     _radarController.dispose();
     _syncAnimController.dispose();
     _ipController.dispose();
@@ -711,6 +737,12 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               _buildSectionHeader('VIVO S1 ENGINE TELEMETRY', icon: Icons.speed_rounded),
               const SizedBox(height: 8),
               _buildTelemetryDashboard(status, isConnected, isDark),
+              const SizedBox(height: 22),
+
+              // 6b. Cellular Mobile Data & Dual SIM Control
+              _buildSectionHeader('CELLULAR & MOBILE DATA', icon: Icons.cell_tower_rounded),
+              const SizedBox(height: 8),
+              _buildCellularDataCard(status, isConnected, isDark),
               const SizedBox(height: 22),
 
               // 7. iOS System & Background Keep-Alive Engine Status
@@ -1444,6 +1476,410 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
           ),
         );
       }),
+    );
+  }
+
+  void _handleMobileDataToggle(bool enabled) async {
+    HapticFeedback.mediumImpact();
+    setState(() {
+      _optimisticMobileData = enabled;
+      _isSwitchingData = true;
+    });
+
+    final success = await RelayClient.instance.setMobileData(enabled);
+
+    if (mounted) {
+      setState(() {
+        _isSwitchingData = false;
+        if (!success) {
+          _optimisticMobileData = null; // Revert
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                success
+                    ? (enabled ? Icons.wifi_tethering_rounded : Icons.portable_wifi_off_rounded)
+                    : Icons.error_outline_rounded,
+                color: success
+                    ? (enabled ? LiquidGlassTheme.gsmGreen : Colors.orangeAccent)
+                    : LiquidGlassTheme.crimsonRed,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  success
+                      ? 'Mobile data ${enabled ? "enabled" : "disabled"} on Vivo S1.'
+                      : 'Failed to toggle mobile data. Check connection.',
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: LiquidGlassTheme.surfaceDark,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
+    }
+  }
+
+  void _handleDataSimSwitch({required int slotIndex, required int subId, required String simName}) async {
+    HapticFeedback.selectionClick();
+    setState(() {
+      _optimisticActiveSlot = slotIndex;
+      _optimisticActiveSubId = subId;
+      _isSwitchingSim = true;
+      _targetSwitchSubId = subId;
+    });
+
+    final success = await RelayClient.instance.setDataSim(slotIndex: slotIndex, subId: subId);
+
+    if (mounted) {
+      setState(() {
+        _isSwitchingSim = false;
+        _targetSwitchSubId = null;
+        if (!success) {
+          _optimisticActiveSlot = null;
+          _optimisticActiveSubId = null;
+        }
+      });
+
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Row(
+            children: [
+              Icon(
+                success ? Icons.swap_horizontal_circle_rounded : Icons.error_outline_rounded,
+                color: success ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.crimsonRed,
+                size: 20,
+              ),
+              const SizedBox(width: 10),
+              Expanded(
+                child: Text(
+                  success
+                      ? 'Switched mobile data connection to $simName on Vivo S1.'
+                      : 'Failed to switch data SIM. Check connection.',
+                  style: const TextStyle(fontWeight: FontWeight.w500),
+                ),
+              ),
+            ],
+          ),
+          backgroundColor: LiquidGlassTheme.surfaceDark,
+          behavior: SnackBarBehavior.floating,
+          duration: const Duration(seconds: 2),
+          shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(14)),
+        ),
+      );
+    }
+  }
+
+  /// Vivo S1 Cellular Mobile Data & Dual SIM Data Control Card
+  Widget _buildCellularDataCard(DeviceStatusModel? status, bool isConnected, bool isDark) {
+    final isMobileDataOn = _optimisticMobileData ?? (status?.isMobileDataEnabled ?? false);
+    final activeSlot = _optimisticActiveSlot ?? (status?.activeDataSlot ?? 0);
+    final activeSubId = _optimisticActiveSubId ?? (status?.activeDataSubId ?? -1);
+
+    // List of SIMs from status or fallback to standard Vivo Dual SIM defaults
+    final List<SimCardInfo> sims = (status != null && status.sims.isNotEmpty)
+        ? status.sims
+        : [
+            SimCardInfo(slotIndex: 0, subId: 6, displayName: 'SIM 1', carrierName: 'ZONG'),
+            SimCardInfo(slotIndex: 1, subId: 2, displayName: 'SIM 2', carrierName: 'Ufone'),
+          ];
+
+    return GlassCard(
+      borderRadius: 22,
+      padding: const EdgeInsets.all(16),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: [
+          // 1. Master Mobile Data Toggle Row
+          Row(
+            children: [
+              Container(
+                width: 42,
+                height: 42,
+                decoration: BoxDecoration(
+                  color: (isMobileDataOn && isConnected)
+                      ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.15)
+                      : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
+                  borderRadius: BorderRadius.circular(12),
+                  border: Border.all(
+                    color: (isMobileDataOn && isConnected)
+                        ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.3)
+                        : (isDark ? Colors.white12 : Colors.black12),
+                    width: 0.8,
+                  ),
+                ),
+                child: Icon(
+                  Icons.signal_cellular_alt_rounded,
+                  color: (isMobileDataOn && isConnected)
+                      ? LiquidGlassTheme.gsmGreen
+                      : LiquidGlassTheme.textSecondary,
+                  size: 22,
+                ),
+              ),
+              const SizedBox(width: 12),
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Text(
+                      'Cellular Mobile Data',
+                      style: TextStyle(
+                        color: isDark ? Colors.white : Colors.black87,
+                        fontSize: 16,
+                        fontWeight: FontWeight.bold,
+                      ),
+                    ),
+                    const SizedBox(height: 2),
+                    Text(
+                      !isConnected
+                          ? 'Vivo host disconnected'
+                          : (isMobileDataOn
+                              ? 'Active (${sims.any((s) => s.slotIndex == activeSlot) ? (sims.firstWhere((s) => s.slotIndex == activeSlot).displayName.isNotEmpty ? sims.firstWhere((s) => s.slotIndex == activeSlot).displayName : "SIM ${activeSlot + 1}") : "SIM ${activeSlot + 1}"})'
+                              : 'Cellular data disconnected'),
+                      style: TextStyle(
+                        color: !isConnected
+                            ? LiquidGlassTheme.textSecondary
+                            : (isMobileDataOn ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.textSecondary),
+                        fontSize: 12,
+                        fontWeight: FontWeight.w500,
+                      ),
+                    ),
+                  ],
+                ),
+              ),
+              if (_isSwitchingData)
+                const SizedBox(
+                  width: 28,
+                  height: 28,
+                  child: CircularProgressIndicator(
+                    strokeWidth: 2.2,
+                    valueColor: AlwaysStoppedAnimation<Color>(LiquidGlassTheme.gsmGreen),
+                  ),
+                )
+              else
+                Switch.adaptive(
+                  value: isConnected && isMobileDataOn,
+                  activeTrackColor: LiquidGlassTheme.gsmGreen,
+                  onChanged: isConnected && !_isSwitchingData
+                      ? (val) => _handleMobileDataToggle(val)
+                      : null,
+                ),
+            ],
+          ),
+
+          const SizedBox(height: 14),
+          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 1),
+          const SizedBox(height: 14),
+
+          // 2. Dual SIM Data Switcher Header
+          Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
+            children: [
+              Row(
+                children: [
+                  const Icon(
+                    Icons.swap_horiz_rounded,
+                    color: LiquidGlassTheme.iosBlue,
+                    size: 18,
+                  ),
+                  const SizedBox(width: 6),
+                  const Text(
+                    'CELLULAR DATA LINE',
+                    style: TextStyle(
+                      color: LiquidGlassTheme.textSecondary,
+                      fontSize: 11,
+                      fontWeight: FontWeight.w600,
+                      letterSpacing: 0.5,
+                    ),
+                  ),
+                ],
+              ),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 3),
+                decoration: BoxDecoration(
+                  color: (isConnected && isMobileDataOn)
+                      ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.12)
+                      : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
+                  borderRadius: BorderRadius.circular(8),
+                  border: Border.all(
+                    color: (isConnected && isMobileDataOn)
+                        ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.25)
+                        : Colors.transparent,
+                    width: 0.8,
+                  ),
+                ),
+                child: Text(
+                  !isConnected
+                      ? 'OFFLINE'
+                      : (isMobileDataOn ? 'SIM ${activeSlot + 1} ONLINE' : 'DATA DISABLED'),
+                  style: TextStyle(
+                    fontSize: 10,
+                    fontWeight: FontWeight.bold,
+                    color: !isConnected
+                        ? LiquidGlassTheme.textSecondary
+                        : (isMobileDataOn ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.textSecondary),
+                    letterSpacing: 0.4,
+                  ),
+                ),
+              ),
+            ],
+          ),
+          const SizedBox(height: 6),
+          const Text(
+            'Select which SIM card provides mobile internet data on Vivo S1:',
+            style: TextStyle(
+              color: LiquidGlassTheme.textSecondary,
+              fontSize: 11,
+            ),
+          ),
+          const SizedBox(height: 12),
+
+          // 3. SIM 1 and SIM 2 Selection Cards
+          Column(
+            children: sims.map((sim) {
+              final isSimActive = (sim.slotIndex == activeSlot) || (sim.subId == activeSubId && activeSubId != -1);
+              final isCurrentSwitchTarget = _isSwitchingSim && _targetSwitchSubId == sim.subId;
+              final slotLabel = 'SIM ${sim.slotIndex + 1}';
+              final displayName = sim.displayName.isNotEmpty ? sim.displayName : slotLabel;
+              final carrierName = sim.carrierName.isNotEmpty ? sim.carrierName : displayName;
+
+              return Padding(
+                padding: const EdgeInsets.only(bottom: 8.0),
+                child: InkWell(
+                  onTap: (isConnected && !isSimActive && !_isSwitchingSim)
+                      ? () => _handleDataSimSwitch(
+                            slotIndex: sim.slotIndex,
+                            subId: sim.subId,
+                            simName: '$slotLabel ($carrierName)',
+                          )
+                      : null,
+                  borderRadius: BorderRadius.circular(16),
+                  child: AnimatedContainer(
+                    duration: const Duration(milliseconds: 250),
+                    padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
+                    decoration: BoxDecoration(
+                      color: isSimActive
+                          ? LiquidGlassTheme.iosBlue.withValues(alpha: isDark ? 0.15 : 0.08)
+                          : (isDark ? Colors.white.withValues(alpha: 0.04) : Colors.black.withValues(alpha: 0.02)),
+                      borderRadius: BorderRadius.circular(16),
+                      border: Border.all(
+                        color: isSimActive
+                            ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.5)
+                            : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06)),
+                        width: isSimActive ? 1.4 : 0.8,
+                      ),
+                    ),
+                    child: Row(
+                      children: [
+                        // SIM badge icon
+                        Container(
+                          width: 36,
+                          height: 36,
+                          decoration: BoxDecoration(
+                            color: isSimActive
+                                ? LiquidGlassTheme.iosBlue.withValues(alpha: 0.2)
+                                : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
+                            borderRadius: BorderRadius.circular(10),
+                          ),
+                          alignment: Alignment.center,
+                          child: Icon(
+                            Icons.sim_card_rounded,
+                            color: isSimActive ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.textSecondary,
+                            size: 20,
+                          ),
+                        ),
+                        const SizedBox(width: 12),
+                        // SIM Details
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: [
+                              Row(
+                                children: [
+                                  Text(
+                                    carrierName,
+                                    style: TextStyle(
+                                      color: isDark ? Colors.white : Colors.black87,
+                                      fontSize: 15,
+                                      fontWeight: FontWeight.bold,
+                                    ),
+                                  ),
+                                  const SizedBox(width: 6),
+                                  Container(
+                                    padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
+                                    decoration: BoxDecoration(
+                                      color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.06),
+                                      borderRadius: BorderRadius.circular(6),
+                                    ),
+                                    child: Text(
+                                      slotLabel,
+                                      style: const TextStyle(
+                                        fontSize: 10,
+                                        fontWeight: FontWeight.w600,
+                                        color: LiquidGlassTheme.textSecondary,
+                                      ),
+                                    ),
+                                  ),
+                                ],
+                              ),
+                              const SizedBox(height: 2),
+                              Text(
+                                isSimActive
+                                    ? (isMobileDataOn ? 'Primary Cellular Data Active' : 'Selected (Data is Off)')
+                                    : 'Tap to switch cellular data',
+                                style: TextStyle(
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w500,
+                                  color: isSimActive
+                                      ? (isMobileDataOn ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.textSecondary)
+                                      : LiquidGlassTheme.textSecondary,
+                                ),
+                              ),
+                            ],
+                          ),
+                        ),
+                        // Trailing Radio / Progress / Checkmark
+                        if (isCurrentSwitchTarget)
+                          const SizedBox(
+                            width: 22,
+                            height: 22,
+                            child: CircularProgressIndicator(
+                              strokeWidth: 2,
+                              valueColor: AlwaysStoppedAnimation<Color>(LiquidGlassTheme.iosBlue),
+                            ),
+                          )
+                        else if (isSimActive)
+                          const Icon(
+                            Icons.check_circle_rounded,
+                            color: LiquidGlassTheme.iosBlue,
+                            size: 22,
+                          )
+                        else
+                          Icon(
+                            Icons.radio_button_unchecked_rounded,
+                            color: isConnected
+                                ? LiquidGlassTheme.textSecondary.withValues(alpha: 0.5)
+                                : LiquidGlassTheme.textSecondary.withValues(alpha: 0.2),
+                            size: 22,
+                          ),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }).toList(),
+          ),
+        ],
+      ),
     );
   }
 
