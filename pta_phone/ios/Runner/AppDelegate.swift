@@ -324,8 +324,10 @@ import UserNotifications
         return
       }
       let prevCategory = audioSession.category.rawValue
-      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetoothA2DP])
-      try audioSession.setActive(true)
+      if audioSession.category != .playback {
+        try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers])
+      }
+      try? audioSession.setActive(true)
 
       UIApplication.shared.beginReceivingRemoteControlEvents()
 
