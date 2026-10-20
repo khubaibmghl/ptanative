@@ -581,7 +581,11 @@ class RelayClient {
     } catch (_) {}
   }
 
+  bool _isNativeCallActive = false;
+
   void _setNativeCallActive(bool active) {
+    if (_isNativeCallActive == active) return;
+    _isNativeCallActive = active;
     try {
       const MethodChannel('com.pta.phone/native_intents').invokeMethod('setCallActive', active);
     } catch (_) {}
@@ -1054,12 +1058,23 @@ class RelayClient {
     }
   }
 
+  int _lastAnswerTimestamp = 0;
+
   Future<bool> answerCall() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if ((now - _lastAnswerTimestamp) < 2500) {
+      logDiagnostic('⚡ Debounced duplicate answerCall invocation (${now - _lastAnswerTimestamp}ms ago)');
+      return true;
+    }
+    if (isAnsweringOrActive && currentActiveCall?.state == PhoneCallState.connected) {
+      logDiagnostic('🛡️ Ignored answerCall: Call is already active and connected.');
+      return true;
+    }
+    _lastAnswerTimestamp = now;
     isAnsweringOrActive = true;
     _setNativeCallActive(true);
     await CallKitService.instance.setCallConnected();
 
-    final now = DateTime.now().millisecondsSinceEpoch;
     if (currentActiveCall != null) {
       currentActiveCall = currentActiveCall!.copyWith(
         state: PhoneCallState.connected,

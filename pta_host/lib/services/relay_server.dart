@@ -65,6 +65,7 @@ class RelayServer {
 
   Timer? _idleTimer;
   int _lastDisconnectTime = 0;
+  int _lastAnswerRequestTime = 0;
   bool enable30MinIdleShutdown = false; // Default false (Relay stays ON permanently)
 
   void handleIncomingSms(String sender, String body, int timestamp) {
@@ -425,6 +426,12 @@ class RelayServer {
           telephonyController.dialNumber(num);
           break;
         case 'ACTION_ANSWER':
+          final nowAnswer = DateTime.now().millisecondsSinceEpoch;
+          if (nowAnswer - _lastAnswerRequestTime < 2500) {
+            debugPrint('[RELAY] ⚡ Ignored duplicate ACTION_ANSWER from client (${nowAnswer - _lastAnswerRequestTime}ms ago)');
+            break;
+          }
+          _lastAnswerRequestTime = nowAnswer;
           logEvent('Answer Request', 'Call accepted on iPhone', ActivityType.call);
           telephonyController.answerCall();
           break;

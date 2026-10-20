@@ -66,6 +66,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
   StreamSubscription<ActiveCallInfo?>? _activeCallSub;
   bool _warnedLowBattery = false;
   bool _isCallMinimized = false;
+  int _lastCallAcceptTimestamp = 0;
 
   final List<Widget> _screens = const [
     RecentsScreen(),
@@ -366,9 +367,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           }
           break;
         case Event.actionCallAccept:
+          final now = DateTime.now().millisecondsSinceEpoch;
+          if (now - _lastCallAcceptTimestamp < 2500) {
+            debugPrint('[CALLKIT_EVENT] ⚡ Debounced duplicate actionCallAccept event');
+            break;
+          }
+          _lastCallAcceptTimestamp = now;
           debugPrint('[CALLKIT_EVENT] 🟢 User accepted call on CallKit');
           RelayClient.instance.answerCall();
-          CallKitService.instance.setCallConnected();
           break;
         case Event.actionCallDecline:
           debugPrint('[CALLKIT_EVENT] 🔴 User explicitly declined incoming call');

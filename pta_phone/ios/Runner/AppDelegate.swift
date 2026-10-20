@@ -293,10 +293,18 @@ import UserNotifications
   }
 
   func setCallActiveState(_ active: Bool) {
+    let wasActive = isCallActive
     isCallActive = active
     let session = AVAudioSession.sharedInstance()
-    logNativeDiagnostic(tag: "CALL-NATIVE", message: "📞 setCallActiveState(\(active)) invoked. Category: \(session.category.rawValue), Mode: \(session.mode.rawValue), silentPlayerIsPlaying: \(silentAudioPlayer?.isPlaying ?? false)")
+    logNativeDiagnostic(tag: "CALL-NATIVE", message: "📞 setCallActiveState(\(active)) invoked. wasActive: \(wasActive), Category: \(session.category.rawValue), Mode: \(session.mode.rawValue), silentPlayerIsPlaying: \(silentAudioPlayer?.isPlaying ?? false)")
     resetInactivityTimer()
+    if !active && session.category == .playAndRecord {
+      do {
+        try session.setActive(false, options: .notifyOthersOnDeactivation)
+      } catch {
+        logNativeDiagnostic(tag: "CALL-NATIVE", message: "⚠️ Could not deactivate call audio session: \(error.localizedDescription)")
+      }
+    }
     ensureKeepAlivePlaying()
   }
 
@@ -311,12 +319,12 @@ import UserNotifications
 
     do {
       let audioSession = AVAudioSession.sharedInstance()
-      if audioSession.category == .playAndRecord {
+      if isCallActive && audioSession.category == .playAndRecord {
         logNativeDiagnostic(tag: "KEEP-ALIVE", message: "AudioSession is currently active for call (.playAndRecord, mode: \(audioSession.mode.rawValue)). Preserving call audio.")
         return
       }
       let prevCategory = audioSession.category.rawValue
-      try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
+      try audioSession.setCategory(.playback, mode: .default, options: [.mixWithOthers, .allowBluetoothA2DP])
       try audioSession.setActive(true)
 
       UIApplication.shared.beginReceivingRemoteControlEvents()

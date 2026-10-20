@@ -34,8 +34,16 @@ class TelephonyController {
     }
   }
 
+  int _lastAnswerTime = 0;
+
   /// Multi-tier hardware call acceptance pipeline
   Future<void> answerCall() async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (now - _lastAnswerTime < 2500) {
+      debugPrint('[TELEPHONY] ⚡ Debounced redundant answerCall intent (${now - _lastAnswerTime}ms ago)');
+      return;
+    }
+    _lastAnswerTime = now;
     debugPrint('[TELEPHONY] Answering call via native & hardware pipeline...');
     try {
       final ok = await _channel.invokeMethod<bool>('answerCall');
