@@ -731,7 +731,7 @@ class RelayServer {
   if (path == 'api/hotspot/status') {
     final active = await telephonyController.isHotspotActive();
     return Response.ok(
-      jsonEncode({'active': active, 'gateway': '192.168.60.21'}),
+      jsonEncode({'active': active, 'gateway': '192.168.60.221'}),
       headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
     );
   }

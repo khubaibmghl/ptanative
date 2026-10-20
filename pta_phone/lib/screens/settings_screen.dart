@@ -309,7 +309,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     }
 
     HapticFeedback.mediumImpact();
-    final defaultName = (ip == '192.168.60.21' || ip == '192.168.60.221' || ip == '192.168.60.21')
+    final defaultName = (ip == '192.168.60.221' || ip == '192.168.43.1')
         ? 'Vivo S1 Hotspot'
         : (ip == '127.0.0.1' ? 'ADB Loopback' : 'Host ($ip)');
 
@@ -553,7 +553,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 textInputAction: TextInputAction.next,
                 decoration: InputDecoration(
                   labelText: 'Host IP Address',
-                  hintText: '192.168.60.21',
+                  hintText: '192.168.60.221',
                   hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38, fontSize: 13),
                   labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
                   prefixIcon: const Icon(Icons.router_rounded, size: 20),
@@ -925,7 +925,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 const SizedBox(height: 3),
                 Text(
                   isHotspot
-                      ? 'iPhone IP: ${_currentLocalIp ?? "192.168.60.x"} • Auto-locked to Host 192.168.60.21'
+                      ? 'iPhone IP: ${_currentLocalIp ?? "192.168.60.x"} • Auto-locked to Host 192.168.60.221'
                       : (isWifi
                           ? 'iPhone IP: ${_currentLocalIp ?? "Wi-Fi"} • Scanning router subnet /24'
                           : 'Connect to Vivo S1 Hotspot in iOS Settings > Wi-Fi to auto-pair'),
@@ -1756,7 +1756,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
 
   /// 1. Direct Wi-Fi / Hotspot IP Configuration (High-Tech Futuristic Glass Pod)
   Widget _buildDirectConfigCard(bool isConnected, bool isDark) {
-    final effectiveHostIp = _ipController.text.trim().isNotEmpty ? _ipController.text.trim() : '192.168.60.21';
+    final effectiveHostIp = _ipController.text.trim().isNotEmpty ? _ipController.text.trim() : '192.168.60.221';
     final effectivePort = _portController.text.trim().isNotEmpty ? _portController.text.trim() : '8080';
     final endpointUrl = 'ws://$effectiveHostIp:$effectivePort/ws';
 
@@ -1979,7 +1979,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               decoration: InputDecoration(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 labelText: 'Vivo Host IP Address',
-                hintText: '192.168.60.21',
+                hintText: '192.168.60.221',
                 labelStyle: TextStyle(
                   color: LiquidGlassTheme.textSecondary,
                   fontSize: 12,
@@ -2196,7 +2196,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             spacing: 8,
             runSpacing: 6,
             children: [
-              _buildPresetChip('📱 Vivo Hotspot (192.168.60.21)', '192.168.60.21', 8080, isDark),
+              _buildPresetChip('📱 Vivo Hotspot (192.168.60.221)', '192.168.60.221', 8080, isDark),
               _buildPresetChip('🏠 Home Wi-Fi (192.168.23.68)', '192.168.23.68', 8080, isDark),
               _buildPresetChip('💻 ADB Loopback (127.0.0.1)', '127.0.0.1', 8080, isDark),
               // Radar Auto-Discover Quick Chip

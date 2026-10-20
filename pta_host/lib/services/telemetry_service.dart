@@ -15,11 +15,11 @@ class TelemetryService {
   bool isCharging = false;
   
   // Network Interface Breakdown
-  String localIp = '192.168.60.21';
-  String hotspotIp = '192.168.60.21';
+  String localIp = '192.168.60.221';
+  String hotspotIp = '192.168.60.221';
   String wifiIp = '';
   String cellularIp = '';
-  String activeNetworkLabel = 'Vivo Hotspot (192.168.60.21)';
+  String activeNetworkLabel = 'Vivo Hotspot (192.168.60.221)';
   bool isHotspotBroadcasting = false;
 
   // Cache of last broadcasted values to prevent redundant radio wakeups
@@ -139,7 +139,7 @@ class TelemetryService {
         } catch (_) {}
       }
 
-      hotspotIp = foundHotspot ?? '192.168.60.21';
+      hotspotIp = foundHotspot ?? '192.168.60.221';
       wifiIp = foundWifi ?? '';
       cellularIp = foundCellular ?? '';
 
@@ -158,7 +158,7 @@ class TelemetryService {
         activeNetworkLabel = 'Standby Hotspot ($hotspotIp)';
       }
     } catch (_) {
-      localIp = '192.168.60.21';
+      localIp = '192.168.60.221';
     }
   }
 }
