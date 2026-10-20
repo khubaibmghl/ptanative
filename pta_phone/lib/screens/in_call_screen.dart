@@ -53,11 +53,13 @@ class _InCallScreenState extends State<InCallScreen> {
   void didUpdateWidget(covariant InCallScreen oldWidget) {
     super.didUpdateWidget(oldWidget);
     if (widget.callInfo.state != oldWidget.callInfo.state) {
+      RelayClient.instance.logDiagnostic('📞 [IN-CALL-STATE-CHANGE] didUpdateWidget state changed: ${oldWidget.callInfo.state} -> ${widget.callInfo.state}');
       _initCallTimer();
     } else if (widget.callInfo.state == PhoneCallState.connected && widget.callInfo.durationSeconds > 0) {
       final now = DateTime.now().millisecondsSinceEpoch;
       final drift = (widget.callInfo.durationSeconds - _elapsedSeconds).abs();
       if (drift >= 2) {
+        RelayClient.instance.logDiagnostic('⚠️ [IN-CALL-DRIFT-RESYNC] Timer drift >= 2s detected! HostDur: ${widget.callInfo.durationSeconds}s, LocalElapsed: $_elapsedSeconds, drift: ${drift}s. Resyncing local anchor.');
         _localCallStartTimeMs = now - (widget.callInfo.durationSeconds * 1000);
         setState(() {
           _elapsedSeconds = widget.callInfo.durationSeconds;
@@ -81,12 +83,24 @@ class _InCallScreenState extends State<InCallScreen> {
         _elapsedSeconds = 0;
       }
 
+      RelayClient.instance.logDiagnostic('⏱️ [IN-CALL-TIMER-INIT] Timer initialized. State: ${widget.callInfo.state}, HostDur: ${widget.callInfo.durationSeconds}s, LocalAnchor: $_localCallStartTimeMs, InitialElapsed: $_elapsedSeconds');
+
+      int lastTickMs = DateTime.now().millisecondsSinceEpoch;
       _timer = Timer.periodic(const Duration(seconds: 1), (_) {
         if (mounted) {
           final curNow = DateTime.now().millisecondsSinceEpoch;
+          final deltaMs = curNow - lastTickMs;
+          lastTickMs = curNow;
+
           final sec = _localCallStartTimeMs != null
               ? ((curNow - _localCallStartTimeMs!) ~/ 1000)
               : (_elapsedSeconds + 1);
+
+          // Detect if Flutter UI thread / isolate was stalled or suspended
+          if (deltaMs > 1500) {
+            RelayClient.instance.logDiagnostic('🚨 [IN-CALL-FREEZE-ALERT] Flutter main isolate thread delay detected! Delta: ${deltaMs}ms (>1500ms). Current elapsed: ${sec}s');
+          }
+
           setState(() {
             _elapsedSeconds = sec >= 0 ? sec : 0;
           });
@@ -97,6 +111,7 @@ class _InCallScreenState extends State<InCallScreen> {
       if (widget.callInfo.durationSeconds > 0) {
         _elapsedSeconds = widget.callInfo.durationSeconds;
       }
+      RelayClient.instance.logDiagnostic('📴 [IN-CALL-TIMER-STOP] Call disconnected. Frozen at $_elapsedSeconds seconds.');
     } else {
       _timer?.cancel();
       _localCallStartTimeMs = null;

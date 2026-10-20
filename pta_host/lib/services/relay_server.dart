@@ -53,6 +53,8 @@ class RelayServer {
 
   RelayServer({required this.telephonyController});
 
+  int get connectedClientCount => _connectedSockets.length;
+
   void logEvent(String title, String subtitle, ActivityType type) {
     final entry = ActivityLog(title: title, subtitle: subtitle, type: type);
     activityLogs.insert(0, entry);
@@ -83,7 +85,13 @@ class RelayServer {
         (WebSocketChannel socket, String? protocol) {
           _connectedSockets.add(socket);
           _lastDisconnectTime = 0;
-          logEvent('Client Connected', 'iPhone paired via WebSocket', ActivityType.success);
+          final clientIp = _lastKnownClientAddress?.address ?? 'Unknown';
+          final connectTime = DateTime.now().millisecondsSinceEpoch;
+          int clientPingCount = 0;
+          int lastPingReceivedTime = connectTime;
+
+          logEvent('Client Connected', 'iPhone connected from $clientIp. Total active: ${_connectedSockets.length}', ActivityType.success);
+          debugPrint('[HOST-RELAY-DIAGNOSTIC] 🟢 iPhone WebSocket connected from $clientIp. Total active sockets: ${_connectedSockets.length}');
 
           // Send initial state & device status
           socket.sink.add(jsonEncode({
@@ -100,7 +108,12 @@ class RelayServer {
               try {
                 final msg = RelayMessage.fromJsonString(raw);
                 if (msg.type == 'PING') {
+                  clientPingCount++;
+                  lastPingReceivedTime = DateTime.now().millisecondsSinceEpoch;
                   socket.sink.add(RelayMessage.pong().toJsonString());
+                  if (clientPingCount == 1 || clientPingCount % 6 == 0) {
+                    debugPrint('[HOST-RELAY-DIAGNOSTIC] 💓 Received PING #$clientPingCount from iPhone ($clientIp). Replied with PONG.');
+                  }
                   return;
                 }
               } catch (_) {}
@@ -109,12 +122,29 @@ class RelayServer {
             onDone: () {
               _connectedSockets.remove(socket);
               _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
-              logEvent('Client Disconnected', 'iPhone socket closed', ActivityType.info);
+              final durationSec = (_lastDisconnectTime - connectTime) ~/ 1000;
+              final idleSincePingMs = _lastDisconnectTime - lastPingReceivedTime;
+              final closeCode = socket.closeCode;
+              final closeReason = socket.closeReason;
+              logEvent(
+                'Client Disconnected',
+                'iPhone closed. Code: $closeCode, Reason: "$closeReason", Connected: ${durationSec}s, Pings: $clientPingCount, IdleSincePing: ${idleSincePingMs}ms',
+                ActivityType.info,
+              );
+              debugPrint('[HOST-RELAY-DIAGNOSTIC] 🔴 iPhone WebSocket onDone fired! CloseCode: $closeCode, Reason: "$closeReason", ClientIp: $clientIp, Duration: ${durationSec}s, TotalPings: $clientPingCount, IdleSincePing: ${idleSincePingMs}ms. Remaining sockets: ${_connectedSockets.length}');
             },
             onError: (err) {
               _connectedSockets.remove(socket);
               _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
-              logEvent('Socket Error', err.toString(), ActivityType.error);
+              final durationSec = (_lastDisconnectTime - connectTime) ~/ 1000;
+              final closeCode = socket.closeCode;
+              final closeReason = socket.closeReason;
+              logEvent(
+                'Socket Error',
+                'Error: $err, Code: $closeCode, Connected: ${durationSec}s',
+                ActivityType.error,
+              );
+              debugPrint('[HOST-RELAY-DIAGNOSTIC] ❌ iPhone WebSocket onError: $err, CloseCode: $closeCode, Reason: "$closeReason", ClientIp: $clientIp, Duration: ${durationSec}s. Remaining: ${_connectedSockets.length}');
             },
           );
         },
@@ -279,6 +309,13 @@ class RelayServer {
     // High-priority local UDP burst for call rings, dialing, connects, disconnects, and SMS (survives screen-lock & dry hotspot)
     if (msg.type == 'RINGING' || msg.type == 'INCOMING_RING' || msg.type == 'CALL_DIALING' || msg.type == 'CALL_ACTIVE' || msg.type == 'CALL_DISCONNECTED' || msg.type == 'SMS_RECEIVED') {
       broadcastUdpBurst(msg);
+    }
+
+    if (msg.type == 'CALL_DIALING' || msg.type == 'CALL_ACTIVE' || msg.type == 'CALL_TICK' || msg.type == 'CALL_DISCONNECTED') {
+      final dur = currentCallState['duration_seconds'] as int? ?? 0;
+      if (msg.type != 'CALL_TICK' || dur == 0 || dur % 5 == 0) {
+        debugPrint('[HOST-CALL-BROADCAST] 📢 Broadcast [${msg.type}] to ${_connectedSockets.length} sockets (UDP: ${msg.type != 'CALL_TICK'}). Payload: $jsonStr');
+      }
     }
 
     if (isCloudConnected && _cloudSocket != null) {

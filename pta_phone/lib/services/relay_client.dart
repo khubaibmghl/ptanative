@@ -67,6 +67,8 @@ class RelayClient {
   Timer? _pingTimer;
   int _lastPongTime = 0;
   bool _isConnected = false;
+  int _connectionEstablishedTime = 0;
+  int _sessionMessageCount = 0;
 
   bool get isConnected => _isConnected;
 
@@ -174,6 +176,9 @@ class RelayClient {
     hostPort = prefs.getInt('host_port') ?? 8080;
     cloudRelayUrl = prefs.getString('cloud_url') ?? '';
     pairingKey = prefs.getString('pairing_key') ?? 'pta_native_default';
+
+    // Pipe WebRTC voice tunnel diagnostics into live console sheet
+    voiceTunnel.onLog = (msg) => logDiagnostic('🔊 [WEBRTC] $msg');
 
     // Connect immediately to last known host IP (fast launch, 0ms blocking)
     connect();
@@ -420,15 +425,27 @@ class RelayClient {
 
     try {
       final wsUrl = Uri.parse('ws://$hostIp:$hostPort/ws');
-      logDiagnostic('Connecting to WebSocket: $wsUrl');
+      logDiagnostic('🔌 [CONNECTING] WebSocket connecting to: $wsUrl (AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
       _channel = WebSocketChannel.connect(wsUrl);
 
       _wsSubscription?.cancel();
       _wsSubscription = _channel!.stream.listen(
         _onMessageReceived,
-        onDone: _onDisconnected,
+        onDone: () {
+          final code = _channel?.closeCode;
+          final reason = _channel?.closeReason;
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
+          final idleMs = now - _lastPongTime;
+          logDiagnostic('🔴 [SOCKET-CLOSED] WebSocket onDone fired! CloseCode: $code, Reason: "$reason", ConnectedFor: ${dur}s, IdleSinceLastPong: ${idleMs}ms, AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"}, TotalFrames: $_sessionMessageCount');
+          _onDisconnected();
+        },
         onError: (err) {
-          logDiagnostic('Socket Error: $err');
+          final code = _channel?.closeCode;
+          final reason = _channel?.closeReason;
+          final now = DateTime.now().millisecondsSinceEpoch;
+          final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
+          logDiagnostic('❌ [SOCKET-ERROR] WebSocket onError: $err. CloseCode: $code, Reason: "$reason", ConnectedFor: ${dur}s, AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"}');
           if (_shouldUseCloudFallback()) {
             _connectCloudFallback();
           } else {
@@ -441,7 +458,7 @@ class RelayClient {
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
       _startPingHeartbeat();
     } catch (e) {
-      logDiagnostic('Connect Exception: $e');
+      logDiagnostic('❌ [CONNECT-EXCEPTION] Exception connecting to $hostIp:$hostPort: $e');
       if (_shouldUseCloudFallback()) {
         _connectCloudFallback();
       } else {
@@ -501,7 +518,10 @@ class RelayClient {
   }
 
   void _onDisconnected() {
-    logDiagnostic('Socket Disconnected (onDone/onError fired)');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
+    logDiagnostic('🔌 [DISCONNECTED] Socket marked disconnected. SessionAge: ${dur}s, AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"}');
+    _connectionEstablishedTime = 0;
     _pingTimer?.cancel();
     _pingTimer = null;
     _isConnected = false;
@@ -528,7 +548,7 @@ class RelayClient {
         // Watchdog: 35s timeout ensures broken Wi-Fi sockets are detected and reconnected quickly
         final maxWatchdogTimeout = isAppPaused ? 40000 : 35000;
         if (elapsedSincePong > maxWatchdogTimeout) {
-          logDiagnostic('Ping watchdog timeout (>${maxWatchdogTimeout ~/ 1000}s no response). Disconnecting to trigger instant reconnect.');
+          logDiagnostic('⚠️ [WATCHDOG-TIMEOUT] No response from host for ${elapsedSincePong}ms (Limit: ${maxWatchdogTimeout}ms). Disconnecting socket to force immediate reconnect.');
           disconnect();
           connect();
           return;
@@ -540,9 +560,10 @@ class RelayClient {
           try {
             _lastPingSentTimestamp = DateTime.now().millisecondsSinceEpoch;
             _channel!.sink.add(RelayMessage.ping().toJsonString());
+            logDiagnostic('💓 [PING-SENT] Sent PING to host $hostIp:$hostPort (IdleSincePong: ${now - _lastPongTime}ms, AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
             _pingNativeKeepAlive();
           } catch (e) {
-            logDiagnostic('Ping Send Error: $e');
+            logDiagnostic('❌ [PING-SEND-ERROR] Error sending PING: $e');
             _onDisconnected();
             connect();
           }
@@ -568,11 +589,13 @@ class RelayClient {
 
   void onAppResumed() {
     isAppPaused = false;
-    logDiagnostic('App Resumed from screen lock/background');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
+    logDiagnostic('☀️ [APP-RESUMED] App resumed from background/screen lock. Connected: $_isConnected, ChannelActive: ${_channel != null}, SessionAge: ${dur}s, IdleSinceLastPong: ${now - _lastPongTime}ms');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
     _pingNativeKeepAlive();
     if (!_isConnected || _channel == null) {
-      logDiagnostic('Instant wake reconnecting directly to host $hostIp...');
+      logDiagnostic('⚡ [INSTANT-WAKE] Background connection was dropped! Reconnecting directly to host $hostIp...');
       connect();
       Future.delayed(const Duration(milliseconds: 1500), () {
         if (!_isConnected) {
@@ -595,7 +618,9 @@ class RelayClient {
 
   void onAppPaused() {
     isAppPaused = true;
-    logDiagnostic('App entered background/screen locked (2-Hour Keep-Alive Active)');
+    final now = DateTime.now().millisecondsSinceEpoch;
+    final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
+    logDiagnostic('📱 [APP-PAUSED] App entered background / screen lock. Connected: $_isConnected, ChannelActive: ${_channel != null}, SessionAge: ${dur}s, IdleSinceLastPong: ${now - _lastPongTime}ms');
     _lastPongTime = DateTime.now().millisecondsSinceEpoch;
     _pingNativeKeepAlive();
   }
@@ -653,7 +678,9 @@ class RelayClient {
 
       if (!_isConnected) {
         _isConnected = true;
-        logDiagnostic('Socket Connected Successfully!');
+        _connectionEstablishedTime = DateTime.now().millisecondsSinceEpoch;
+        _sessionMessageCount = 0;
+        logDiagnostic('✅ [SOCKET-CONNECTED] Socket Connected Successfully! Session initialized at $_connectionEstablishedTime');
         _reconnectTimer?.cancel();
         _reconnectTimer = null;
         logDiagnostic('🛑 Background search process stopped (connection established).');
@@ -661,6 +688,7 @@ class RelayClient {
         syncAll();
       }
 
+      _sessionMessageCount++;
       // Any valid message received from host confirms link liveness
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
       _pingNativeKeepAlive();
@@ -673,6 +701,7 @@ class RelayClient {
         case 'PONG':
           if (_lastPingSentTimestamp > 0) {
             lastPingLatencyMs = _lastPongTime - _lastPingSentTimestamp;
+            logDiagnostic('📥 [PONG-RECEIVED] Heartbeat confirmed! Roundtrip RTT: ${lastPingLatencyMs}ms (AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
           }
           break;
 
@@ -782,6 +811,7 @@ class RelayClient {
 
         case 'CALL_DIALING':
           final dialNum = msg.data['number'] as String? ?? '';
+          logDiagnostic('📞 [CALL-DIALING-RX] Outgoing call dialing initiated for: $dialNum');
           final dialContact = await DatabaseHelper.instance.findContactByNumber(dialNum);
           currentActiveCall = ActiveCallInfo(
             number: dialNum.isNotEmpty ? dialNum : 'Cellular Call',
@@ -797,12 +827,15 @@ class RelayClient {
         case 'CALL_ACTIVE':
           final number = msg.data['number'] as String? ?? '';
           final isAnswered = msg.data['isAnswered'] as bool? ?? (msg.data['startTime'] != null && (msg.data['startTime'] as int) > 0);
-          
+          final rawStartTime = msg.data['startTime'] as int? ?? 0;
+
           // Anchor active call start time to iPhone's local clock to eliminate multi-second clock skew between devices
           final localNow = DateTime.now().millisecondsSinceEpoch;
           final startTimeMs = (currentActiveCall != null && currentActiveCall!.state == PhoneCallState.connected && currentActiveCall!.startTime > 0)
               ? currentActiveCall!.startTime
               : localNow;
+          final clockSkewMs = rawStartTime > 0 ? (localNow - (rawStartTime < 100000000000 ? rawStartTime * 1000 : rawStartTime)) : 0;
+          logDiagnostic('🎙️ [CALL-ACTIVE-RX] Call Active event: number=$number, hostStartTime=$rawStartTime, localNow=$localNow, clockSkew=${clockSkewMs}ms, isAnswered=$isAnswered');
 
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
           final bool wasIncomingCall = currentActiveCall?.isIncoming ?? false;
@@ -832,7 +865,7 @@ class RelayClient {
             _setNativeCallActive(true);
             // Inform Apple CallKit CXProvider that the call has connected (CXCallConnected)
             await CallKitService.instance.setCallConnected();
-            logDiagnostic('🎙️ Active cellular call established on Vivo S1');
+            logDiagnostic('🎙️ Active cellular call established on Vivo S1 (CallKit & Native keepalive informed)');
           }
           break;
 
@@ -840,10 +873,15 @@ class RelayClient {
           final dur = msg.data['duration'] as int? ?? 0;
           if (currentActiveCall != null) {
             int adjustedStartTime = currentActiveCall!.startTime;
+            final tickLocalNow = DateTime.now().millisecondsSinceEpoch;
+            final currentLocalElapsed = adjustedStartTime > 0 ? (tickLocalNow - adjustedStartTime) ~/ 1000 : 0;
+            final drift = (currentLocalElapsed - dur).abs();
+            if (dur % 5 == 0 || dur <= 3 || drift >= 2) {
+              logDiagnostic('⏱️ [CALL-TICK-RX] HostDur: ${dur}s | LocalElapsed: ${currentLocalElapsed}s | Drift: ${drift}s | Anchor: $adjustedStartTime');
+            }
             if (dur > 0) {
-              final tickLocalNow = DateTime.now().millisecondsSinceEpoch;
-              final currentLocalElapsed = adjustedStartTime > 0 ? (tickLocalNow - adjustedStartTime) ~/ 1000 : 0;
-              if (adjustedStartTime == 0 || (currentLocalElapsed - dur).abs() >= 2) {
+              if (adjustedStartTime == 0 || drift >= 2) {
+                logDiagnostic('⚠️ [CALL-TICK-RESYNC] Timer drift >= 2s ($drift). Resyncing local start anchor.');
                 adjustedStartTime = tickLocalNow - (dur * 1000);
               }
             }
@@ -867,6 +905,7 @@ class RelayClient {
           final number = msg.data['number'] as String? ?? (currentActiveCall?.number ?? 'Unknown');
           final duration = msg.data['duration'] as int? ?? 0;
           final msgIsMissed = msg.data['isMissed'] as bool? ?? false;
+          logDiagnostic('📴 [CALL-DISCONNECT-RX] Call Disconnected! Number: $number, Duration: ${duration}s, Missed: $msgIsMissed');
 
           // End native Apple CallKit
           await CallKitService.instance.endAllCalls();

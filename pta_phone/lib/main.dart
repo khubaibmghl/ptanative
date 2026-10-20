@@ -98,6 +98,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           (activeCall.state == PhoneCallState.dialing ||
            activeCall.state == PhoneCallState.ringing ||
            activeCall.state == PhoneCallState.connected)) {
+        RelayClient.instance.logDiagnostic('📱 [MAIN-UI-CALL] Active call update: state=${activeCall.state}, dur=${activeCall.durationSeconds}s, minimized=$_isCallMinimized');
         if (mounted) {
           setState(() => _isCallMinimized = false);
           rootNavigatorKey.currentState?.popUntil((route) => route.isFirst);
@@ -305,6 +306,10 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
         if (raw.isNotEmpty) {
           RelayClient.instance.handleNativeUdpFrame(raw);
         }
+      } else if (call.method == 'onNativeLog') {
+        final tag = call.arguments?['tag']?.toString() ?? 'iOS-NATIVE';
+        final msg = call.arguments?['message']?.toString() ?? '';
+        RelayClient.instance.logDiagnostic('🍎 [$tag] $msg');
       }
     });
 

@@ -73,7 +73,7 @@ class TelephonyMonitor {
     if (cleanIncoming.isNotEmpty) {
       _activeNumber = cleanIncoming;
     }
-    debugPrint('[TELEPHONY_MONITOR] State Event: $state | Num: $incomingNum | ActiveNum: $_activeNumber | LastPhase: $_lastPhase');
+    debugPrint('[HOST-TELEPHONY] 📶 Native State Event: state=$state | incomingNum=$incomingNum | activeNum=$_activeNumber | lastPhase=$_lastPhase | eventTimestamp=$eventTimestamp');
 
     if (state == 'RINGING') {
       _dialingFallbackTimer?.cancel();
@@ -102,6 +102,7 @@ class TelephonyMonitor {
         }
 
         server.logEvent('Incoming Call', '$resolvedName (${PhoneNumberNormalizer.formatForDisplay(_activeNumber)})', ActivityType.call);
+        debugPrint('[HOST-TELEPHONY] 🔔 Incoming Ring detected: number=$_activeNumber, name=$resolvedName. Broadcasting INCOMING_RING to ${server.connectedClientCount} clients.');
         server.broadcast(RelayMessage.incomingRing(
           number: _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call',
           name: resolvedName,
@@ -126,6 +127,7 @@ class TelephonyMonitor {
         _callLogged = false;
         final dialNum = _activeNumber.isNotEmpty ? _activeNumber : 'Cellular Call';
         server.logEvent('Dialing Outgoing', dialNum, ActivityType.call);
+        debugPrint('[HOST-TELEPHONY] 📞 Outgoing Call Dialing: number=$dialNum. Broadcasting CALL_DIALING to ${server.connectedClientCount} clients.');
         server.broadcast(RelayMessage.callDialing(
           number: dialNum,
         ));
@@ -182,6 +184,7 @@ class TelephonyMonitor {
             isMissed ? 'Rang for ${ringSec}s' : 'Duration: ${dur}s',
             isMissed ? ActivityType.call : ActivityType.info,
           );
+          debugPrint('[HOST-TELEPHONY] 📴 Call Ended (IDLE): activeNum=$finalNum, finalDur=${dur}s, isMissed=$isMissed, talkStartTime=$_talkStartTime. Broadcasting CALL_DISCONNECTED to ${server.connectedClientCount} clients.');
           server.broadcast(RelayMessage.callDisconnected(
             number: finalNum,
             duration: dur,
@@ -221,6 +224,7 @@ class TelephonyMonitor {
     _callLogged = false;
 
     server.logEvent('Call Connected', 'Call active with $activeNum', ActivityType.call);
+    debugPrint('[HOST-TELEPHONY] 🎙️ Transition to ACTIVE: activeNum=$activeNum, talkStartTime=$_talkStartTime, localNow=${DateTime.now().millisecondsSinceEpoch}. Broadcasting CALL_ACTIVE to ${server.connectedClientCount} clients.');
     server.currentCallState.addAll({
       'is_in_call': true,
       'is_connected': true,
@@ -247,6 +251,9 @@ class TelephonyMonitor {
       final formatted = '${m.toString().padLeft(2, '0')}:${s.toString().padLeft(2, '0')}';
       server.currentCallState['duration_seconds'] = _currentDurationSeconds;
       server.currentCallState['duration_formatted'] = formatted;
+      if (_currentDurationSeconds <= 3 || _currentDurationSeconds % 5 == 0) {
+        debugPrint('[HOST-TELEPHONY] ⏱️ Call Tick: dur=${_currentDurationSeconds}s ($formatted) -> broadcasting to ${server.connectedClientCount} clients.');
+      }
       server.broadcast(RelayMessage.callTick(
         duration: _currentDurationSeconds,
         formatted: formatted,

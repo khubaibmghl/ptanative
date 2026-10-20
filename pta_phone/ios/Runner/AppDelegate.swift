@@ -67,16 +67,47 @@ import UserNotifications
     UNUserNotificationCenter.current().setNotificationCategories([missedCategory, incomingCategory])
   }
 
+  // MARK: - Native Telemetry Diagnostics Forwarder
+
+  func logNativeDiagnostic(tag: String, message: String) {
+    let now = Date()
+    let formatter = DateFormatter()
+    formatter.dateFormat = "HH:mm:ss.SSS"
+    let timeStr = formatter.string(from: now)
+    let fullMsg = "[\(tag)] \(message)"
+    print("[AppDelegate][\(timeStr)] \(fullMsg)")
+    DispatchQueue.main.async { [weak self] in
+      self?.getNativeChannel()?.invokeMethod("onNativeLog", arguments: [
+        "tag": tag,
+        "message": message,
+        "timestamp": Int64(now.timeIntervalSince1970 * 1000)
+      ])
+    }
+  }
+
   // MARK: - Scene & Application Lifecycle Handlers (Permanent Keep-Alive)
 
   func handleSceneDidEnterBackground() {
     resetInactivityTimer()
+    let remaining = UIApplication.shared.backgroundTimeRemaining
+    let session = AVAudioSession.sharedInstance()
+    let playerPlaying = silentAudioPlayer?.isPlaying ?? false
+    logNativeDiagnostic(
+      tag: "BG-LIFECYCLE",
+      message: "📱 App entered BACKGROUND. RemainingTime: \(remaining == Double.greatestFiniteMagnitude ? "Unlimited (Audio)" : "\(Int(remaining))s"), silentAudioPlaying: \(playerPlaying), audioCategory: \(session.category.rawValue), mode: \(session.mode.rawValue), isCallActive: \(isCallActive)"
+    )
     ensureKeepAlivePlaying()
     startBackgroundTask()
   }
 
   func handleSceneWillEnterForeground() {
     resetInactivityTimer()
+    let remaining = UIApplication.shared.backgroundTimeRemaining
+    let session = AVAudioSession.sharedInstance()
+    logNativeDiagnostic(
+      tag: "BG-LIFECYCLE",
+      message: "☀️ App entering FOREGROUND. RemainingTime: \(remaining == Double.greatestFiniteMagnitude ? "Unlimited" : "\(Int(remaining))s"), silentAudioPlaying: \(silentAudioPlayer?.isPlaying ?? false), audioCategory: \(session.category.rawValue)"
+    )
     ensureKeepAlivePlaying()
     endBackgroundTask()
   }
@@ -89,14 +120,25 @@ import UserNotifications
   private func startBackgroundTask() {
     endBackgroundTask()
     backgroundTask = UIApplication.shared.beginBackgroundTask(withName: "PTAPhoneBackgroundKeepAlive") { [weak self] in
-      print("[AppDelegate] ⏱️ System background task expired. Re-asserting continuous audio keep-alive...")
-      self?.ensureKeepAlivePlaying()
-      self?.endBackgroundTask()
+      guard let self = self else { return }
+      let remaining = UIApplication.shared.backgroundTimeRemaining
+      let playerPlaying = self.silentAudioPlayer?.isPlaying ?? false
+      self.logNativeDiagnostic(
+        tag: "BG-TASK-EXPIRED",
+        message: "⚠️ iOS beginBackgroundTask EXPIRED! Remaining: \(remaining)s, PlayerIsPlaying: \(playerPlaying), Re-asserting continuous audio keep-alive..."
+      )
+      self.ensureKeepAlivePlaying()
+      self.endBackgroundTask()
     }
+    logNativeDiagnostic(
+      tag: "BG-TASK-STARTED",
+      message: "iOS beginBackgroundTask asserted (id: \(backgroundTask.rawValue), initialRemaining: \(UIApplication.shared.backgroundTimeRemaining)s)"
+    )
   }
 
   private func endBackgroundTask() {
     if backgroundTask != .invalid {
+      logNativeDiagnostic(tag: "BG-TASK-ENDED", message: "iOS endBackgroundTask called (id: \(backgroundTask.rawValue))")
       UIApplication.shared.endBackgroundTask(backgroundTask)
       backgroundTask = .invalid
     }
@@ -162,7 +204,14 @@ import UserNotifications
   }
 
   @objc private func handleAudioRouteChange(_ notification: Notification) {
-    print("[AppDelegate] Audio route changed (AirPods/Bluetooth/Lock). Ensuring keep-alive...")
+    let reasonVal = notification.userInfo?[AVAudioSessionRouteChangeReasonKey] as? UInt ?? 0
+    let session = AVAudioSession.sharedInstance()
+    let inputs = session.currentRoute.inputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", ")
+    let outputs = session.currentRoute.outputs.map { "\($0.portName)(\($0.portType.rawValue))" }.joined(separator: ", ")
+    logNativeDiagnostic(
+      tag: "AUDIO-ROUTE",
+      message: "Audio route changed. Reason: \(reasonVal), Category: \(session.category.rawValue), Mode: \(session.mode.rawValue), Inputs: [\(inputs)], Outputs: [\(outputs)], isCallActive: \(isCallActive)"
+    )
     DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) { [weak self] in
       self?.ensureKeepAlivePlaying()
     }
@@ -174,33 +223,37 @@ import UserNotifications
           let type = AVAudioSession.InterruptionType(rawValue: typeValue) else {
       return
     }
+    let optVal = userInfo[AVAudioSessionInterruptionOptionKey] as? UInt ?? 0
+    logNativeDiagnostic(
+      tag: "AUDIO-INTERRUPT",
+      message: "Audio Interruption \(type == .began ? "BEGAN" : "ENDED"). Option: \(optVal), isCallActive: \(isCallActive)"
+    )
 
     if type == .ended {
-      print("[AppDelegate] Audio Interruption Ended -> Resuming background keep-alive...")
       ensureKeepAlivePlaying()
     }
   }
 
   @objc private func handleMediaServicesReset(_ notification: Notification) {
-    print("[AppDelegate] Media Services Were Reset -> Recreating audio keep-alive player...")
+    logNativeDiagnostic(tag: "MEDIA-RESET", message: "⚠️ Media Services Were Reset -> Recreating audio keep-alive player...")
     silentAudioPlayer = nil
     ensureKeepAlivePlaying()
   }
 
   @objc private func handleMediaServicesLost(_ notification: Notification) {
-    print("[AppDelegate] Media Services Were Lost...")
+    logNativeDiagnostic(tag: "MEDIA-LOST", message: "⚠️ Media Services Were Lost...")
   }
 
   func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
     if player == silentAudioPlayer {
-      print("[AppDelegate] Silent keep-alive player finished. Looping...")
+      logNativeDiagnostic(tag: "KEEP-ALIVE-PLAYER", message: "Silent keep-alive player finished chunk (success: \(flag)). Looping...")
       silentAudioPlayer?.play()
     }
   }
 
   func audioPlayerDecodeErrorDidOccur(_ player: AVAudioPlayer, error: Error?) {
     if player == silentAudioPlayer {
-      print("[AppDelegate] Silent keep-alive player decode error: \(String(describing: error)).")
+      logNativeDiagnostic(tag: "KEEP-ALIVE-PLAYER", message: "❌ Silent keep-alive player decode error: \(String(describing: error))")
       silentAudioPlayer = nil
       DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
         self?.ensureKeepAlivePlaying()
@@ -224,27 +277,34 @@ import UserNotifications
 
   private func checkInactivityTimeout() {
     let elapsed = Date().timeIntervalSince(lastActivityDate)
+    let remaining = UIApplication.shared.backgroundTimeRemaining
+    let playerPlaying = silentAudioPlayer?.isPlaying ?? false
     if elapsed >= maxInactivityDuration {
       if silentAudioPlayer?.isPlaying == true {
-        print("[AppDelegate] ⏱️ 2-Hour inactivity limit reached (\(Int(elapsed))s). Pausing keep-alive audio to allow system sleep.")
+        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "⏱️ 2-Hour inactivity limit reached (\(Int(elapsed))s). Pausing keep-alive audio to allow system sleep.")
         silentAudioPlayer?.pause()
       }
     } else {
+      if UIApplication.shared.applicationState == .background {
+        logNativeDiagnostic(tag: "BG-HEARTBEAT", message: "🩺 iOS Background Heartbeat. RemainingTime: \(remaining == Double.greatestFiniteMagnitude ? "Unlimited" : "\(Int(remaining))s"), silentPlayerPlaying: \(playerPlaying), isCallActive: \(isCallActive)")
+      }
       ensureKeepAlivePlaying()
     }
   }
 
   func setCallActiveState(_ active: Bool) {
     isCallActive = active
-    print("[AppDelegate] 📞 Call active state changed: \(active). Maintaining audio keep-alive.")
+    let session = AVAudioSession.sharedInstance()
+    logNativeDiagnostic(tag: "CALL-NATIVE", message: "📞 setCallActiveState(\(active)) invoked. Category: \(session.category.rawValue), Mode: \(session.mode.rawValue), silentPlayerIsPlaying: \(silentAudioPlayer?.isPlaying ?? false)")
     resetInactivityTimer()
     ensureKeepAlivePlaying()
   }
 
   func ensureKeepAlivePlaying() {
     // If 2-hour inactivity period has expired, do not keep awake
-    if Date().timeIntervalSince(lastActivityDate) >= maxInactivityDuration {
-      print("[AppDelegate] ⏱️ Skipping keep-alive: 2-hour inactivity window elapsed.")
+    let elapsed = Date().timeIntervalSince(lastActivityDate)
+    if elapsed >= maxInactivityDuration {
+      logNativeDiagnostic(tag: "KEEP-ALIVE", message: "⏱️ Skipping keep-alive: 2-hour inactivity window elapsed (\(Int(elapsed))s).")
       silentAudioPlayer?.pause()
       return
     }
@@ -252,9 +312,10 @@ import UserNotifications
     do {
       let audioSession = AVAudioSession.sharedInstance()
       if audioSession.category == .playAndRecord {
-        print("[AppDelegate] AudioSession is currently active for call (.playAndRecord). Preserving call audio.")
+        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "AudioSession is currently active for call (.playAndRecord, mode: \(audioSession.mode.rawValue)). Preserving call audio.")
         return
       }
+      let prevCategory = audioSession.category.rawValue
       try audioSession.setCategory(.playback, mode: .default, options: [.duckOthers, .allowBluetooth, .allowBluetoothA2DP])
       try audioSession.setActive(true)
 
@@ -268,16 +329,17 @@ import UserNotifications
         silentAudioPlayer?.numberOfLoops = -1
         silentAudioPlayer?.volume = 0.02
         silentAudioPlayer?.prepareToPlay()
+        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "Initialized silentAudioPlayer with synthetic 44.1kHz WAV. Volume: 0.02")
       }
 
       if silentAudioPlayer?.isPlaying == false {
-        silentAudioPlayer?.play()
-        print("[AppDelegate] 🎵 Silent audio keep-alive player actively playing (2-hour window active).")
+        let playRes = silentAudioPlayer?.play() ?? false
+        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "🎵 silentAudioPlayer.play() called -> Result: \(playRes), isPlaying: \(silentAudioPlayer?.isPlaying ?? false), prevCategory: \(prevCategory) -> playback")
       }
 
       setupNowPlayingInfo()
     } catch {
-      print("[AppDelegate] Ensure Keep-Alive Exception: \(error)")
+      logNativeDiagnostic(tag: "KEEP-ALIVE-ERR", message: "❌ Exception in ensureKeepAlivePlaying: \(error.localizedDescription)")
     }
   }
 

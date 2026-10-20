@@ -3,11 +3,19 @@ import 'dart:math';
 import 'package:flutter/foundation.dart';
 import 'package:flutter_callkit_incoming/entities/entities.dart';
 import 'package:flutter_callkit_incoming/flutter_callkit_incoming.dart';
+import 'relay_client.dart';
 
 /// Apple CallKit Bridge for iPhone 15 Pro
 class CallKitService {
   static final CallKitService instance = CallKitService._init();
   CallKitService._init();
+
+  void _log(String msg) {
+    debugPrint('[CALLKIT_DIAGNOSTIC] $msg');
+    try {
+      RelayClient.instance.logDiagnostic('📞 [CALLKIT] $msg');
+    } catch (_) {}
+  }
 
   /// Generates a valid RFC-4122 v4 UUID string required by Apple CallKit (CXCallUpdate)
   static String generateUuid() {
@@ -45,7 +53,7 @@ class CallKitService {
       final now = DateTime.now().millisecondsSinceEpoch;
       // Debounce duplicate presentation for same number within 12 seconds
       if (_lastRingingNumber == handle && (now - _lastRingingTimestamp) < 12000 && currentCallId != null) {
-        debugPrint('[CALLKIT_DIAGNOSTIC] ⚡ Debounced duplicate incoming call presentation for $handle [Existing UUID: $currentCallId]');
+        _log('⚡ Debounced duplicate incoming call presentation for $handle [Existing UUID: $currentCallId]');
         return;
       }
       _lastRingingNumber = handle;
@@ -55,8 +63,8 @@ class CallKitService {
           ? callId
           : (handle.isNotEmpty ? deterministicUuidForNumber(handle) : generateUuid());
       currentCallId = validUuid;
-      debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting showCallkitIncoming for caller "$callerName" ($handle) [UUID: $validUuid]');
-      debugPrint('[CALLKIT_DIAGNOSTIC] 🎙️ CallKit iOS Audio Session settings -> Mode: voiceChat, Active: true, SampleRate: 44100Hz, BufferDuration: 0.005s');
+      _log('📞 Requesting showCallkitIncoming for caller "$callerName" ($handle) [UUID: $validUuid]');
+      _log('🎙️ CallKit iOS Audio Session settings -> Mode: voiceChat, Active: true, SampleRate: 44100Hz, BufferDuration: 0.005s');
 
       final params = CallKitParams(
         id: validUuid,
@@ -102,9 +110,9 @@ class CallKitService {
       );
 
       await FlutterCallkitIncoming.showCallkitIncoming(params);
-      debugPrint('[CALLKIT_DIAGNOSTIC] ✅ showCallkitIncoming triggered successfully');
+      _log('✅ showCallkitIncoming triggered successfully');
     } catch (e) {
-      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception during showCallkitIncoming: $e');
+      _log('❌ Exception during showCallkitIncoming: $e');
     }
   }
 
@@ -116,7 +124,7 @@ class CallKitService {
     try {
       final validUuid = callId.contains('-') && callId.length == 36 ? callId : generateUuid();
       currentCallId = validUuid;
-      debugPrint('[CALLKIT_DIAGNOSTIC] 📞 Requesting startCall for "$callerName" ($handle) [UUID: $validUuid]');
+      _log('📞 Requesting startCall for "$callerName" ($handle) [UUID: $validUuid]');
       final params = CallKitParams(
         id: validUuid,
         nameCaller: callerName.isNotEmpty ? callerName : handle,
@@ -140,9 +148,9 @@ class CallKitService {
         ),
       );
       await FlutterCallkitIncoming.startCall(params);
-      debugPrint('[CALLKIT_DIAGNOSTIC] ✅ startCall completed successfully');
+      _log('✅ startCall completed successfully');
     } catch (e) {
-      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception during startCall: $e');
+      _log('❌ Exception during startCall: $e');
     }
   }
 
@@ -151,17 +159,17 @@ class CallKitService {
     try {
       final id = callId ?? currentCallId;
       if (id != null && id.isNotEmpty) {
-        debugPrint('[CALLKIT_DIAGNOSTIC] 🟢 Setting CallKit call as connected (CXCallConnected) for ID: $id');
+        _log('🟢 Setting CallKit call as connected (CXCallConnected) for ID: $id');
         await FlutterCallkitIncoming.setCallConnected(id);
       }
     } catch (e) {
-      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception setting call connected: $e');
+      _log('❌ Exception setting call connected: $e');
     }
   }
 
   Future<void> endCall(String callId) async {
     try {
-      debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending CallKit call ID: $callId');
+      _log('🛑 Ending CallKit call ID: $callId');
       isProgrammaticDismiss = true;
       if (currentCallId == callId) currentCallId = null;
       _lastRingingNumber = null;
@@ -170,13 +178,13 @@ class CallKitService {
         isProgrammaticDismiss = false;
       });
     } catch (e) {
-      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending call: $e');
+      _log('❌ Exception ending call: $e');
     }
   }
 
   Future<void> endAllCalls() async {
     try {
-      debugPrint('[CALLKIT_DIAGNOSTIC] 🛑 Ending all CallKit active calls and releasing iOS AudioSession');
+      _log('🛑 Ending all CallKit active calls and releasing iOS AudioSession');
       isProgrammaticDismiss = true;
       currentCallId = null;
       _lastRingingNumber = null;
@@ -185,7 +193,7 @@ class CallKitService {
         isProgrammaticDismiss = false;
       });
     } catch (e) {
-      debugPrint('[CALLKIT_DIAGNOSTIC] ❌ Exception ending all calls: $e');
+      _log('❌ Exception ending all calls: $e');
     }
   }
 }
