@@ -234,7 +234,8 @@ class RelayServer {
     final payload = msg.toJsonString().codeUnits;
     final targets = <InternetAddress>{
       InternetAddress('255.255.255.255'),
-      InternetAddress('192.168.43.255'), // Standard Vivo S1 Android Hotspot subnet broadcast
+      InternetAddress('192.168.60.255'), // Vivo S1 Hotspot subnet broadcast
+      InternetAddress('192.168.43.255'), // Legacy Hotspot subnet broadcast
     };
 
     if (_lastKnownClientAddress != null) {
@@ -730,7 +731,7 @@ class RelayServer {
   if (path == 'api/hotspot/status') {
     final active = await telephonyController.isHotspotActive();
     return Response.ok(
-      jsonEncode({'active': active, 'gateway': '192.168.43.1'}),
+      jsonEncode({'active': active, 'gateway': '192.168.60.21'}),
       headers: {'content-type': 'application/json', 'access-control-allow-origin': '*'},
     );
   }

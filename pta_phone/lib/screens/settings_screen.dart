@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'dart:math' as math;
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:pta_shared/pta_shared.dart';
@@ -26,13 +25,11 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
   bool _isSaving = false;
   bool _isDiscovering = false;
   bool _isSyncing = false;
-  bool _obscurePairingKey = true;
 
   String? _currentLocalIp;
   int _pingLatency = -1;
   bool _isPinging = false;
 
-  late AnimationController _radarController;
   late AnimationController _syncAnimController;
   StreamSubscription<bool>? _connectionSub;
   StreamSubscription<DeviceStatusModel>? _statusSub;
@@ -53,26 +50,8 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     _cloudUrlController.text = RelayClient.instance.cloudRelayUrl;
     _pairingKeyController.text = RelayClient.instance.pairingKey;
 
-    final isConnected = RelayClient.instance.isConnected;
-    _radarController = AnimationController(
-      vsync: this,
-      duration: const Duration(milliseconds: 1400),
-    );
-    if (!isConnected) {
-      _radarController.repeat();
-    }
-
-    _connectionSub = RelayClient.instance.connectionStream.listen((connected) {
-      if (mounted) {
-        setState(() {
-          if (connected) {
-            _radarController.stop();
-          } else {
-            _radarController.duration = const Duration(milliseconds: 1400);
-            _radarController.repeat();
-          }
-        });
-      }
+    _connectionSub = RelayClient.instance.connectionStream.listen((_) {
+      if (mounted) setState(() {});
     });
 
     _statusSub = RelayClient.instance.statusStream.listen((status) {
@@ -103,7 +82,6 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
   void dispose() {
     _connectionSub?.cancel();
     _statusSub?.cancel();
-    _radarController.dispose();
     _syncAnimController.dispose();
     _ipController.dispose();
     _portController.dispose();
@@ -331,7 +309,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     }
 
     HapticFeedback.mediumImpact();
-    final defaultName = ip == '192.168.43.1'
+    final defaultName = (ip == '192.168.60.21' || ip == '192.168.60.221' || ip == '192.168.60.21')
         ? 'Vivo S1 Hotspot'
         : (ip == '127.0.0.1' ? 'ADB Loopback' : 'Host ($ip)');
 
@@ -575,7 +553,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 textInputAction: TextInputAction.next,
                 decoration: InputDecoration(
                   labelText: 'Host IP Address',
-                  hintText: '192.168.43.1',
+                  hintText: '192.168.60.21',
                   hintStyle: TextStyle(color: isDark ? Colors.white30 : Colors.black38, fontSize: 13),
                   labelStyle: TextStyle(color: isDark ? Colors.white70 : Colors.black54),
                   prefixIcon: const Icon(Icons.router_rounded, size: 20),
@@ -667,105 +645,94 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                   return ListView(
                     padding: const EdgeInsets.only(left: 16, right: 16, top: 8, bottom: 120),
                     children: [
-                      // 1. Direct Wi-Fi / Hotspot IP Configuration (AT THE VERY TOP)
-              _buildSectionHeader(
-                'HOST ADDRESS CONFIGURATION',
-                icon: Icons.router_rounded,
-                trailing: TextButton.icon(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    visualDensity: VisualDensity.compact,
-                    backgroundColor: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  icon: const Icon(Icons.paste_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
-                  label: const Text(
-                    'Paste IP',
-                    style: TextStyle(
-                      color: LiquidGlassTheme.iosBlue,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                  onPressed: _pasteFromClipboard,
-                ),
-              ),
-              const SizedBox(height: 8),
-              _buildDirectConfigCard(isConnected, isDark),
-              const SizedBox(height: 20),
+                      // 1. Smart Local Network & Subnet Environment Banner (AT TOP FOR INSTANT CLARITY)
+                      _buildSmartNetworkBanner(isDark),
+                      const SizedBox(height: 14),
 
-              // 2. Saved Host Connections (RIGHT AFTER ADDRESS ENTERING)
-              _buildSectionHeader(
-                'SAVED HOST PROFILES',
-                icon: Icons.alt_route_rounded,
-                trailing: TextButton.icon(
-                  style: TextButton.styleFrom(
-                    padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
-                    visualDensity: VisualDensity.compact,
-                    backgroundColor: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
-                    shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
-                  ),
-                  icon: const Icon(Icons.add_rounded, size: 16, color: LiquidGlassTheme.iosBlue),
-                  label: const Text(
-                    'Add New',
-                    style: TextStyle(
-                      color: LiquidGlassTheme.iosBlue,
-                      fontWeight: FontWeight.bold,
-                      fontSize: 12,
-                    ),
-                  ),
-                  onPressed: _showAddConnectionDialog,
-                ),
-              ),
-              const SizedBox(height: 8),
-              _buildSavedConnectionsList(isConnected, isDark),
-              const SizedBox(height: 22),
+                      // 2. Direct Wi-Fi / Hotspot IP Configuration
+                      _buildSectionHeader(
+                        'HOST ADDRESS CONFIGURATION',
+                        icon: Icons.router_rounded,
+                        trailing: TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          icon: const Icon(Icons.paste_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
+                          label: const Text(
+                            'Paste IP',
+                            style: TextStyle(
+                              color: LiquidGlassTheme.iosBlue,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          onPressed: _pasteFromClipboard,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildDirectConfigCard(isConnected, isDark),
+                      const SizedBox(height: 20),
 
-              // 3. Smart Local Network & Subnet Environment Banner
-              _buildSmartNetworkBanner(isDark),
-              const SizedBox(height: 14),
+                      // 3. Saved Host Connections
+                      _buildSectionHeader(
+                        'SAVED HOST PROFILES',
+                        icon: Icons.alt_route_rounded,
+                        trailing: TextButton.icon(
+                          style: TextButton.styleFrom(
+                            padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
+                            visualDensity: VisualDensity.compact,
+                            backgroundColor: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
+                            shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
+                          ),
+                          icon: const Icon(Icons.add_rounded, size: 16, color: LiquidGlassTheme.iosBlue),
+                          label: const Text(
+                            'Add New',
+                            style: TextStyle(
+                              color: LiquidGlassTheme.iosBlue,
+                              fontWeight: FontWeight.bold,
+                              fontSize: 12,
+                            ),
+                          ),
+                          onPressed: _showAddConnectionDialog,
+                        ),
+                      ),
+                      const SizedBox(height: 8),
+                      _buildSavedConnectionsList(isConnected, isDark),
+                      const SizedBox(height: 22),
 
-              // 4. Automated Auto-Discovery Action Card
-              _buildAutomatedDiscoveryCard(isConnected, isDark),
-              const SizedBox(height: 20),
+                      // 4. Vivo S1 Hardware Telemetry Pro Dashboard
+                      _buildSectionHeader('VIVO S1 ENGINE TELEMETRY', icon: Icons.speed_rounded),
+                      const SizedBox(height: 8),
+                      _buildTelemetryDashboard(status, isConnected, isDark),
+                      const SizedBox(height: 22),
 
-              // 5. Connection Hero & Mesh State
-              _buildConnectionHeroCard(isConnected, isDark),
-              const SizedBox(height: 22),
+                      // 5. Cellular Mobile Data & Dual SIM Control
+                      _buildSectionHeader('CELLULAR & MOBILE DATA', icon: Icons.cell_tower_rounded),
+                      const SizedBox(height: 8),
+                      _buildCellularDataCard(status, isConnected, isDark),
+                      const SizedBox(height: 22),
 
-              // 6. Vivo S1 Hardware Telemetry Pro Dashboard
-              _buildSectionHeader('VIVO S1 ENGINE TELEMETRY', icon: Icons.speed_rounded),
-              const SizedBox(height: 8),
-              _buildTelemetryDashboard(status, isConnected, isDark),
-              const SizedBox(height: 22),
+                      // 6. Diagnostics & System Maintenance
+                      _buildSectionHeader('DIAGNOSTICS & SYSTEM TOOLS', icon: Icons.build_circle_rounded),
+                      const SizedBox(height: 8),
+                      _buildDiagnosticsCard(isDark),
+                      const SizedBox(height: 24),
 
-              // 6b. Cellular Mobile Data & Dual SIM Control
-              _buildSectionHeader('CELLULAR & MOBILE DATA', icon: Icons.cell_tower_rounded),
-              const SizedBox(height: 8),
-              _buildCellularDataCard(status, isConnected, isDark),
-              const SizedBox(height: 22),
-
-              // 7. iOS System & Background Keep-Alive Engine Status
-              _buildSectionHeader('IOS SYSTEM & BACKGROUND RESILIENCE', icon: Icons.shield_rounded),
-              const SizedBox(height: 8),
-              _buildBackgroundResilienceCard(isDark),
-              const SizedBox(height: 22),
-
-              // 8. Remote Cloud Relay (WAN Tunnel)
-              _buildSectionHeader('REMOTE CLOUD RELAY (WAN ACCESS)', icon: Icons.cloud_sync_rounded),
-              const SizedBox(height: 8),
-              _buildCloudRelayCard(isDark),
-              const SizedBox(height: 22),
-
-              // 9. Diagnostics & System Maintenance
-              _buildSectionHeader('DIAGNOSTICS & SYSTEM TOOLS', icon: Icons.build_circle_rounded),
-              const SizedBox(height: 8),
-              _buildDiagnosticsCard(isDark),
-              const SizedBox(height: 24),
-
-              // 10. Architecture & Engine About Footer
-              _buildArchitectureFooter(isDark),
-              const SizedBox(height: 16),
+                      // 7. Minimal Clean Footer
+                      Center(
+                        child: Text(
+                          'PTA Native • v1.4.0 (Build 27)',
+                          style: TextStyle(
+                            color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.7),
+                            fontSize: 12,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ),
+                      const SizedBox(height: 16),
             ],
           );
         },
@@ -886,7 +853,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
 
   /// 0. Smart Local Network & Subnet Environment Banner
   Widget _buildSmartNetworkBanner(bool isDark) {
-    final isHotspot = _currentLocalIp != null && _currentLocalIp!.startsWith('192.168.43.');
+    final isHotspot = _currentLocalIp != null && (_currentLocalIp!.startsWith('192.168.60.') || _currentLocalIp!.startsWith('192.168.43.'));
     final isWifi = _currentLocalIp != null && !isHotspot;
 
     final bannerColor = isHotspot
@@ -958,7 +925,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
                 const SizedBox(height: 3),
                 Text(
                   isHotspot
-                      ? 'iPhone IP: ${_currentLocalIp ?? "192.168.43.x"} • Auto-locked to Host 192.168.43.1'
+                      ? 'iPhone IP: ${_currentLocalIp ?? "192.168.60.x"} • Auto-locked to Host 192.168.60.21'
                       : (isWifi
                           ? 'iPhone IP: ${_currentLocalIp ?? "Wi-Fi"} • Scanning router subnet /24'
                           : 'Connect to Vivo S1 Hotspot in iOS Settings > Wi-Fi to auto-pair'),
@@ -980,326 +947,6 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             },
           ),
         ],
-      ),
-    );
-  }
-
-  /// 1. Top Connection Hero Card with Live Status & Endpoint
-  Widget _buildConnectionHeroCard(bool isConnected, bool isDark) {
-    final viaCloud = RelayClient.instance.isConnectedViaCloud;
-    final accentColor = isConnected
-        ? (viaCloud ? LiquidGlassTheme.iosBlue : LiquidGlassTheme.gsmGreen)
-        : Colors.orangeAccent;
-
-    return GlassCard(
-      borderRadius: 22,
-      padding: const EdgeInsets.all(18),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          Row(
-            children: [
-              // Breathing glowing pulse indicator
-              AnimatedBuilder(
-                animation: _radarController,
-                builder: (context, child) {
-                  final glowRadius = 4.0 + (_radarController.value * 6.0);
-                  return Container(
-                    width: 14,
-                    height: 14,
-                    decoration: BoxDecoration(
-                      color: accentColor,
-                      shape: BoxShape.circle,
-                      boxShadow: [
-                        BoxShadow(
-                          color: accentColor.withValues(alpha: isConnected ? 0.6 : 0.3),
-                          blurRadius: glowRadius,
-                          spreadRadius: 2,
-                        ),
-                      ],
-                    ),
-                  );
-                },
-              ),
-              const SizedBox(width: 12),
-              Expanded(
-                child: Column(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Text(
-                      isConnected
-                          ? (viaCloud ? 'Connected • Cloud Gateway Tunnel' : 'Connected • Vivo S1 Direct Mesh')
-                          : 'Disconnected / Searching...',
-                      style: TextStyle(
-                        color: isDark ? Colors.white : Colors.black87,
-                        fontSize: 16,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                    const SizedBox(height: 2),
-                    Text(
-                      isConnected
-                          ? (viaCloud ? 'WAN remote link active via cloud server' : 'Ultra-low latency Wi-Fi/Hotspot socket link')
-                          : 'Tap Auto-Discover or select a connection profile below',
-                      style: TextStyle(
-                        color: LiquidGlassTheme.textSecondary,
-                        fontSize: 12,
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              // Refresh / Reconnect Action
-              Container(
-                decoration: BoxDecoration(
-                  color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-                  shape: BoxShape.circle,
-                ),
-                child: IconButton(
-                  icon: const Icon(Icons.refresh_rounded, size: 20),
-                  color: LiquidGlassTheme.iosBlue,
-                  tooltip: 'Reconnect Now',
-                  onPressed: () {
-                    HapticFeedback.lightImpact();
-                    RelayClient.instance.disconnect();
-                    RelayClient.instance.connect();
-                  },
-                ),
-              ),
-            ],
-          ),
-          const SizedBox(height: 14),
-
-          // Active Endpoint Chip with 1-Tap Copy
-          Container(
-            padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 8),
-            decoration: BoxDecoration(
-              color: isDark ? Colors.black.withValues(alpha: 0.35) : Colors.white.withValues(alpha: 0.6),
-              borderRadius: BorderRadius.circular(12),
-              border: Border.all(
-                color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
-                width: 0.8,
-              ),
-            ),
-            child: Row(
-              children: [
-                Icon(Icons.terminal_rounded, size: 16, color: accentColor),
-                const SizedBox(width: 8),
-                Expanded(
-                  child: Text(
-                    'ws://${RelayClient.instance.hostIp}:${RelayClient.instance.hostPort}/ws',
-                    style: TextStyle(
-                      fontFamily: 'monospace',
-                      fontSize: 12,
-                      fontWeight: FontWeight.w600,
-                      color: isDark ? Colors.white70 : Colors.black87,
-                    ),
-                    overflow: TextOverflow.ellipsis,
-                  ),
-                ),
-                InkWell(
-                  onTap: () {
-                    HapticFeedback.selectionClick();
-                    final url = 'ws://${RelayClient.instance.hostIp}:${RelayClient.instance.hostPort}/ws';
-                    Clipboard.setData(ClipboardData(text: url));
-                    ScaffoldMessenger.of(context).showSnackBar(
-                      const SnackBar(
-                        content: Text('Endpoint copied to clipboard'),
-                        behavior: SnackBarBehavior.floating,
-                        duration: Duration(seconds: 1),
-                      ),
-                    );
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(4.0),
-                    child: Icon(Icons.copy_rounded, size: 14, color: LiquidGlassTheme.textSecondary),
-                  ),
-                ),
-              ],
-            ),
-          ),
-          const SizedBox(height: 10),
-
-          // Live Latency Indicator & Measurement Row
-          Row(
-            children: [
-              Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                decoration: BoxDecoration(
-                  color: (_pingLatency >= 0 && _pingLatency < 80)
-                      ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.15)
-                      : (isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05)),
-                  borderRadius: BorderRadius.circular(10),
-                  border: Border.all(
-                    color: (_pingLatency >= 0 && _pingLatency < 80)
-                        ? LiquidGlassTheme.gsmGreen.withValues(alpha: 0.3)
-                        : (isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.06)),
-                    width: 0.8,
-                  ),
-                ),
-                child: Row(
-                  mainAxisSize: MainAxisSize.min,
-                  children: [
-                    Icon(
-                      Icons.speed_rounded,
-                      size: 14,
-                      color: (_pingLatency >= 0 && _pingLatency < 80)
-                          ? LiquidGlassTheme.gsmGreen
-                          : LiquidGlassTheme.textSecondary,
-                    ),
-                    const SizedBox(width: 5),
-                    Text(
-                      _isPinging
-                          ? 'Testing Ping...'
-                          : (_pingLatency >= 0
-                              ? '${_pingLatency}ms roundtrip latency'
-                              : (RelayClient.instance.lastPingLatencyMs > 0
-                                  ? '${RelayClient.instance.lastPingLatencyMs}ms heartbeat'
-                                  : 'Standby')),
-                      style: TextStyle(
-                        fontSize: 11,
-                        fontWeight: FontWeight.w600,
-                        color: (_pingLatency >= 0 && _pingLatency < 80)
-                            ? LiquidGlassTheme.gsmGreen
-                            : (isDark ? Colors.white70 : Colors.black87),
-                      ),
-                    ),
-                  ],
-                ),
-              ),
-              const Spacer(),
-              InkWell(
-                borderRadius: BorderRadius.circular(8),
-                onTap: _isPinging ? null : _testPing,
-                child: Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 5),
-                  decoration: BoxDecoration(
-                    color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
-                    borderRadius: BorderRadius.circular(8),
-                  ),
-                  child: Row(
-                    mainAxisSize: MainAxisSize.min,
-                    children: [
-                      if (_isPinging)
-                        const SizedBox(
-                          width: 12,
-                          height: 12,
-                          child: CircularProgressIndicator(strokeWidth: 1.5, color: LiquidGlassTheme.iosBlue),
-                        )
-                      else
-                        const Icon(Icons.bolt_rounded, size: 14, color: LiquidGlassTheme.iosBlue),
-                      const SizedBox(width: 4),
-                      const Text(
-                        'Test Latency',
-                        style: TextStyle(fontSize: 11, fontWeight: FontWeight.bold, color: LiquidGlassTheme.iosBlue),
-                      ),
-                    ],
-                  ),
-                ),
-              ),
-            ],
-          ),
-        ],
-      ),
-    );
-  }
-
-  /// 2. Automated Auto-Discovery Card with Live Animated Radar Scanner / Target Lock
-  Widget _buildAutomatedDiscoveryCard(bool isConnected, bool isDark) {
-    return GlassCard(
-      borderRadius: 22,
-      padding: const EdgeInsets.all(16),
-      child: InkWell(
-        borderRadius: BorderRadius.circular(20),
-        onTap: isConnected ? _testPing : (_isDiscovering ? null : _autoDiscover),
-        child: Row(
-          children: [
-            // Radar visual scanner animation / Target locked reticle
-            AnimatedBuilder(
-              animation: _radarController,
-              builder: (context, child) {
-                return CustomPaint(
-                  size: const Size(54, 54),
-                  painter: _RadarScopePainter(
-                    rotation: _radarController.value * 2 * math.pi,
-                    isScanning: _isDiscovering,
-                    isConnected: isConnected,
-                  ),
-                );
-              },
-            ),
-            const SizedBox(width: 16),
-            Expanded(
-              child: Column(
-                crossAxisAlignment: CrossAxisAlignment.start,
-                children: [
-                  Row(
-                    children: [
-                      Flexible(
-                        child: Text(
-                          isConnected
-                              ? 'Vivo S1 Linked & Locked'
-                              : (_isDiscovering ? 'Scanning Mesh Network...' : 'Searching for Vivo S1...'),
-                          style: TextStyle(
-                            color: isDark ? Colors.white : Colors.black87,
-                            fontSize: 16,
-                            fontWeight: FontWeight.bold,
-                          ),
-                          overflow: TextOverflow.ellipsis,
-                        ),
-                      ),
-                      const SizedBox(width: 6),
-                      Container(
-                        padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-                        decoration: BoxDecoration(
-                          color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue).withValues(alpha: 0.15),
-                          borderRadius: BorderRadius.circular(6),
-                        ),
-                        child: Text(
-                          isConnected ? 'LINK ACTIVE' : (_isDiscovering ? 'SCANNING' : 'SUPERFAST SEARCH'),
-                          style: TextStyle(
-                            color: isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue,
-                            fontSize: 9,
-                            fontWeight: FontWeight.w800,
-                          ),
-                        ),
-                      ),
-                    ],
-                  ),
-                  const SizedBox(height: 3),
-                  Text(
-                    isConnected
-                        ? 'Connected at ${RelayClient.instance.hostIp}:${RelayClient.instance.hostPort} • Background search stopped'
-                        : (_isDiscovering
-                            ? 'Broadcasting UDP :8081 & scanning standard hotspot gateways...'
-                            : 'Auto-probing Hotspot 192.168.43.1 & UDP broadcast in background'),
-                    style: TextStyle(
-                      color: LiquidGlassTheme.textSecondary,
-                      fontSize: 12,
-                    ),
-                  ),
-                ],
-              ),
-            ),
-            const SizedBox(width: 8),
-            Container(
-              padding: const EdgeInsets.all(8),
-              decoration: BoxDecoration(
-                color: (isConnected ? LiquidGlassTheme.gsmGreen : LiquidGlassTheme.iosBlue).withValues(alpha: 0.15),
-                shape: BoxShape.circle,
-              ),
-              child: isConnected
-                  ? const Icon(Icons.check_circle_rounded, size: 18, color: LiquidGlassTheme.gsmGreen)
-                  : (_isDiscovering
-                      ? const SizedBox(
-                          width: 18,
-                          height: 18,
-                          child: CircularProgressIndicator(strokeWidth: 2, color: LiquidGlassTheme.iosBlue),
-                        )
-                      : const Icon(Icons.radar_rounded, size: 18, color: LiquidGlassTheme.iosBlue)),
-            ),
-          ],
-        ),
       ),
     );
   }
@@ -1883,120 +1530,6 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 4. iOS System & Background Keep-Alive Engine Resilience Card
-  Widget _buildBackgroundResilienceCard(bool isDark) {
-    return GlassCard(
-      borderRadius: 22,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          _buildResilienceRow(
-            icon: Icons.phone_android_rounded,
-            color: LiquidGlassTheme.gsmGreen,
-            title: 'Apple CallKit Telephony Engine',
-            subtitle: 'Active • Native slide-to-answer and full-screen ring UI',
-            badge: 'ACTIVE',
-            badgeColor: LiquidGlassTheme.gsmGreen,
-            isDark: isDark,
-          ),
-          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 16),
-          _buildResilienceRow(
-            icon: Icons.surround_sound_rounded,
-            color: LiquidGlassTheme.iosBlue,
-            title: 'Native Swift UDP Listener (:8081)',
-            subtitle: 'Active NWListener • Receives signaling on dry cellular link',
-            badge: 'PORT 8081',
-            badgeColor: LiquidGlassTheme.iosBlue,
-            isDark: isDark,
-          ),
-          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 16),
-          _buildResilienceRow(
-            icon: Icons.graphic_eq_rounded,
-            color: Colors.purpleAccent,
-            title: 'Silent Audio Keep-Alive Loop',
-            subtitle: '20Hz Sub-bass sine stream • Prevents socket closure on screen lock',
-            badge: 'HARDENED',
-            badgeColor: Colors.purpleAccent,
-            isDark: isDark,
-          ),
-          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 16),
-          _buildResilienceRow(
-            icon: Icons.lock_clock_rounded,
-            color: Colors.tealAccent,
-            title: 'Multi-Lock SceneDelegate Handlers',
-            subtitle: 'Forwarded lifecycle events • Tested for 2nd+ lock transitions',
-            badge: 'VERIFIED',
-            badgeColor: Colors.teal,
-            isDark: isDark,
-          ),
-        ],
-      ),
-    );
-  }
-
-  Widget _buildResilienceRow({
-    required IconData icon,
-    required Color color,
-    required String title,
-    required String subtitle,
-    required String badge,
-    required Color badgeColor,
-    required bool isDark,
-  }) {
-    return Row(
-      children: [
-        Container(
-          padding: const EdgeInsets.all(8),
-          decoration: BoxDecoration(
-            color: color.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(10),
-          ),
-          child: Icon(icon, color: color, size: 18),
-        ),
-        const SizedBox(width: 12),
-        Expanded(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: [
-              Text(
-                title,
-                style: TextStyle(
-                  color: isDark ? Colors.white : Colors.black87,
-                  fontSize: 13,
-                  fontWeight: FontWeight.bold,
-                ),
-              ),
-              const SizedBox(height: 1),
-              Text(
-                subtitle,
-                style: TextStyle(
-                  color: LiquidGlassTheme.textSecondary,
-                  fontSize: 11,
-                ),
-              ),
-            ],
-          ),
-        ),
-        const SizedBox(width: 6),
-        Container(
-          padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 2),
-          decoration: BoxDecoration(
-            color: badgeColor.withValues(alpha: 0.15),
-            borderRadius: BorderRadius.circular(6),
-          ),
-          child: Text(
-            badge,
-            style: TextStyle(
-              color: badgeColor,
-              fontSize: 9,
-              fontWeight: FontWeight.bold,
-            ),
-          ),
-        ),
-      ],
-    );
-  }
-
   /// 2. Saved Host Connections (1-Tap Profile Switcher)
   Widget _buildSavedConnectionsList(bool isConnected, bool isDark) {
     final connections = RelayClient.instance.savedConnections;
@@ -2223,7 +1756,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
 
   /// 1. Direct Wi-Fi / Hotspot IP Configuration (High-Tech Futuristic Glass Pod)
   Widget _buildDirectConfigCard(bool isConnected, bool isDark) {
-    final effectiveHostIp = _ipController.text.trim().isNotEmpty ? _ipController.text.trim() : '192.168.43.1';
+    final effectiveHostIp = _ipController.text.trim().isNotEmpty ? _ipController.text.trim() : '192.168.60.21';
     final effectivePort = _portController.text.trim().isNotEmpty ? _portController.text.trim() : '8080';
     final endpointUrl = 'ws://$effectiveHostIp:$effectivePort/ws';
 
@@ -2446,7 +1979,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
               decoration: InputDecoration(
                 contentPadding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
                 labelText: 'Vivo Host IP Address',
-                hintText: '192.168.43.1',
+                hintText: '192.168.60.21',
                 labelStyle: TextStyle(
                   color: LiquidGlassTheme.textSecondary,
                   fontSize: 12,
@@ -2663,7 +2196,7 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
             spacing: 8,
             runSpacing: 6,
             children: [
-              _buildPresetChip('📱 Vivo Hotspot (192.168.43.1)', '192.168.43.1', 8080, isDark),
+              _buildPresetChip('📱 Vivo Hotspot (192.168.60.21)', '192.168.60.21', 8080, isDark),
               _buildPresetChip('🏠 Home Wi-Fi (192.168.23.68)', '192.168.23.68', 8080, isDark),
               _buildPresetChip('💻 ADB Loopback (127.0.0.1)', '127.0.0.1', 8080, isDark),
               // Radar Auto-Discover Quick Chip
@@ -2872,84 +2405,6 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 6. Remote Cloud Relay Card (WAN Access)
-  Widget _buildCloudRelayCard(bool isDark) {
-    return GlassCard(
-      borderRadius: 22,
-      padding: const EdgeInsets.all(16),
-      child: Column(
-        children: [
-          TextField(
-            controller: _cloudUrlController,
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-            decoration: InputDecoration(
-              labelText: 'Cloud WebSocket Server URL (Optional)',
-              hintText: 'wss://your-relay-domain.com/ws',
-              hintStyle: TextStyle(color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.5)),
-              labelStyle: TextStyle(color: LiquidGlassTheme.textSecondary),
-              prefixIcon: const Icon(Icons.cloud_outlined, color: LiquidGlassTheme.iosBlue),
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: const Icon(Icons.content_paste_rounded, size: 18),
-                    tooltip: 'Paste URL',
-                    onPressed: () async {
-                      final data = await Clipboard.getData(Clipboard.kTextPlain);
-                      if (data?.text != null && mounted) {
-                        setState(() => _cloudUrlController.text = data!.text!);
-                      }
-                    },
-                  ),
-                  if (_cloudUrlController.text.isNotEmpty)
-                    IconButton(
-                      icon: const Icon(Icons.clear_rounded, size: 18),
-                      onPressed: () => setState(() => _cloudUrlController.clear()),
-                    ),
-                ],
-              ),
-              border: InputBorder.none,
-            ),
-          ),
-          Divider(color: isDark ? Colors.white10 : Colors.black12, height: 1),
-          TextField(
-            controller: _pairingKeyController,
-            obscureText: _obscurePairingKey,
-            style: TextStyle(color: isDark ? Colors.white : Colors.black87),
-            decoration: InputDecoration(
-              labelText: 'Pairing Security Key',
-              labelStyle: TextStyle(color: LiquidGlassTheme.textSecondary),
-              prefixIcon: const Icon(Icons.key_rounded, color: LiquidGlassTheme.iosBlue),
-              suffixIcon: Row(
-                mainAxisSize: MainAxisSize.min,
-                children: [
-                  IconButton(
-                    icon: Icon(
-                      _obscurePairingKey ? Icons.visibility_off_rounded : Icons.visibility_rounded,
-                      size: 18,
-                    ),
-                    onPressed: () => setState(() => _obscurePairingKey = !_obscurePairingKey),
-                  ),
-                  IconButton(
-                    icon: const Icon(Icons.content_paste_rounded, size: 18),
-                    tooltip: 'Paste Key',
-                    onPressed: () async {
-                      final data = await Clipboard.getData(Clipboard.kTextPlain);
-                      if (data?.text != null && mounted) {
-                        setState(() => _pairingKeyController.text = data!.text!);
-                      }
-                    },
-                  ),
-                ],
-              ),
-              border: InputBorder.none,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   /// 7. Diagnostics & System Maintenance Tools
   Widget _buildDiagnosticsCard(bool isDark) {
     return GlassCard(
@@ -3143,154 +2598,4 @@ class _SettingsScreenState extends State<SettingsScreen> with TickerProviderStat
     );
   }
 
-  /// 8. Engine Architecture & Version Card
-  Widget _buildArchitectureFooter(bool isDark) {
-    return Column(
-      children: [
-        Container(
-          width: 44,
-          height: 44,
-          decoration: BoxDecoration(
-            color: isDark ? Colors.white10 : Colors.black.withValues(alpha: 0.05),
-            shape: BoxShape.circle,
-          ),
-          child: const Icon(Icons.phonelink_ring_rounded, color: LiquidGlassTheme.iosBlue, size: 24),
-        ),
-        const SizedBox(height: 8),
-        Text(
-          'PTA Native Client for iPhone',
-          style: TextStyle(
-            color: isDark ? Colors.white70 : Colors.black87,
-            fontWeight: FontWeight.bold,
-            fontSize: 14,
-          ),
-        ),
-        const SizedBox(height: 2),
-        Text(
-          'v1.4.0 (Build 27) • Apple CallKit & Vivo S1 Telephony Engine',
-          style: TextStyle(
-            color: LiquidGlassTheme.textSecondary,
-            fontSize: 11,
-          ),
-        ),
-      ],
-    );
-  }
-}
-
-/// Custom Animated Radar Scope Painter
-class _RadarScopePainter extends CustomPainter {
-  final double rotation;
-  final bool isScanning;
-  final bool isConnected;
-
-  _RadarScopePainter({
-    required this.rotation,
-    required this.isScanning,
-    required this.isConnected,
-  });
-
-  @override
-  void paint(Canvas canvas, Size size) {
-    final center = Offset(size.width / 2, size.height / 2);
-    final maxRadius = size.width / 2;
-
-    if (isConnected) {
-      // LOCKED & CONNECTED STATE: Solid, calm target-lock reticle (no spinning sweep)
-      final bgPaint = Paint()
-        ..color = const Color(0xFF34C759).withValues(alpha: 0.10)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, maxRadius, bgPaint);
-
-      // Range rings in Apple Green
-      final ringPaint = Paint()
-        ..color = const Color(0xFF34C759).withValues(alpha: 0.35)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.2;
-
-      canvas.drawCircle(center, maxRadius * 0.45, ringPaint);
-      canvas.drawCircle(center, maxRadius * 0.8, ringPaint);
-      canvas.drawCircle(center, maxRadius, ringPaint);
-
-      // Crosshair Reticle Markers
-      final crossPaint = Paint()
-        ..color = const Color(0xFF34C759).withValues(alpha: 0.5)
-        ..strokeWidth = 1.4;
-
-      canvas.drawLine(Offset(center.dx, center.dy - maxRadius), Offset(center.dx, center.dy - maxRadius * 0.65), crossPaint);
-      canvas.drawLine(Offset(center.dx, center.dy + maxRadius * 0.65), Offset(center.dx, center.dy + maxRadius), crossPaint);
-      canvas.drawLine(Offset(center.dx - maxRadius, center.dy), Offset(center.dx - maxRadius * 0.65, center.dy), crossPaint);
-      canvas.drawLine(Offset(center.dx + maxRadius * 0.65, center.dy), Offset(center.dx + maxRadius, center.dy), crossPaint);
-
-      // Solid Center Lock Dot & Bullseye Ring
-      final dotPaint = Paint()
-        ..color = const Color(0xFF34C759)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, 4.0, dotPaint);
-
-      final glowPaint = Paint()
-        ..color = const Color(0xFF34C759).withValues(alpha: 0.3)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3;
-      canvas.drawCircle(center, 7.0, glowPaint);
-    } else {
-      // SEARCHING STATE: Superfast rotating radar sweep
-      final bgPaint = Paint()
-        ..color = const Color(0xFF007AFF).withValues(alpha: 0.08)
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, maxRadius, bgPaint);
-
-      // Range rings
-      final ringPaint = Paint()
-        ..color = const Color(0xFF007AFF).withValues(alpha: 0.25)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 1.0;
-
-      canvas.drawCircle(center, maxRadius * 0.4, ringPaint);
-      canvas.drawCircle(center, maxRadius * 0.75, ringPaint);
-      canvas.drawCircle(center, maxRadius, ringPaint);
-
-      // Crosshairs
-      final crossPaint = Paint()
-        ..color = const Color(0xFF007AFF).withValues(alpha: 0.2)
-        ..strokeWidth = 0.8;
-      canvas.drawLine(Offset(center.dx, 0), Offset(center.dx, size.height), crossPaint);
-      canvas.drawLine(Offset(0, center.dy), Offset(size.width, center.dy), crossPaint);
-
-      // Rotating Radar Sweep Beam (Vibrant Cyan/Blue)
-      final sweepPaint = Paint()
-        ..shader = SweepGradient(
-          startAngle: 0.0,
-          endAngle: math.pi / 2,
-          colors: [
-            const Color(0xFF007AFF).withValues(alpha: 0.0),
-            const Color(0xFF007AFF).withValues(alpha: 0.45),
-          ],
-          transform: GradientRotation(rotation),
-        ).createShader(Rect.fromCircle(center: center, radius: maxRadius))
-        ..style = PaintingStyle.fill;
-
-      canvas.drawCircle(center, maxRadius, sweepPaint);
-
-      // Center Search Beacon
-      final targetColor = isScanning ? const Color(0xFF007AFF) : Colors.orangeAccent;
-      final dotPaint = Paint()
-        ..color = targetColor
-        ..style = PaintingStyle.fill;
-      canvas.drawCircle(center, 3.5, dotPaint);
-
-      final glowPaint = Paint()
-        ..color = targetColor.withValues(alpha: 0.35)
-        ..style = PaintingStyle.stroke
-        ..strokeWidth = 3;
-      canvas.drawCircle(center, 5.5, glowPaint);
-    }
-  }
-
-  @override
-  bool shouldRepaint(covariant _RadarScopePainter oldDelegate) {
-    return oldDelegate.rotation != rotation ||
-        oldDelegate.isScanning != isScanning ||
-        oldDelegate.isConnected != isConnected;
-  }
 }

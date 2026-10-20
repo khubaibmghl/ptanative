@@ -17,6 +17,7 @@ import android.provider.Settings
 import android.telecom.TelecomManager
 import android.net.wifi.WifiManager
 import android.telephony.SmsManager
+import android.telephony.SubscriptionManager
 import android.telephony.TelephonyManager
 import java.io.File
 import java.net.NetworkInterface
@@ -93,6 +94,14 @@ class MainActivity : FlutterActivity() {
                     val limit = call.argument<Int>("limit") ?: 500
                     val list = getAllSmsNative(limit)
                     result.success(list)
+                }
+                "setMobileData" -> {
+                    val enabled = call.argument<Boolean>("enabled") ?: false
+                    result.success(setMobileDataNative(enabled))
+                }
+                "setDataSim" -> {
+                    val subId = call.argument<Int>("subId") ?: -1
+                    result.success(setDataSimNative(subId))
                 }
                 else -> result.notImplemented()
             }
@@ -513,6 +522,67 @@ class MainActivity : FlutterActivity() {
             e.printStackTrace()
         }
         return result
+    }
+
+    private fun setMobileDataNative(enabled: Boolean): Boolean {
+        var success = false
+        val intVal = if (enabled) 1 else 0
+        // Tier 1: Settings.Global (works with WRITE_SECURE_SETTINGS)
+        try {
+            Settings.Global.putInt(contentResolver, "mobile_data", intVal)
+            Settings.Global.putInt(contentResolver, "mobile_data1", intVal)
+            Settings.Global.putInt(contentResolver, "mobile_data2", intVal)
+            success = true
+        } catch (e: Exception) {
+            // WRITE_SECURE_SETTINGS not yet granted
+        }
+
+        // Tier 2: TelephonyManager setDataEnabled
+        try {
+            val telephonyManager = getSystemService(Context.TELEPHONY_SERVICE) as? TelephonyManager
+            if (telephonyManager != null) {
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
+                    telephonyManager.isDataEnabled = enabled
+                    success = true
+                } else {
+                    val method = telephonyManager.javaClass.getDeclaredMethod("setDataEnabled", Boolean::class.javaPrimitiveType)
+                    method.isAccessible = true
+                    method.invoke(telephonyManager, enabled)
+                    success = true
+                }
+            }
+        } catch (e: Exception) {
+            // Requires MODIFY_PHONE_STATE
+        }
+
+        return success
+    }
+
+    private fun setDataSimNative(subId: Int): Boolean {
+        var success = false
+        // Tier 1: Settings.Global (works with WRITE_SECURE_SETTINGS)
+        try {
+            Settings.Global.putInt(contentResolver, "user_preferred_data_sub", subId)
+            Settings.Global.putInt(contentResolver, "multi_sim_data_call", subId)
+            success = true
+        } catch (e: Exception) {
+            // WRITE_SECURE_SETTINGS not yet granted
+        }
+
+        // Tier 2: SubscriptionManager setDefaultDataSubId via reflection
+        try {
+            val subManager = getSystemService(Context.TELEPHONY_SUBSCRIPTION_SERVICE)
+            if (subManager != null) {
+                val method = subManager.javaClass.getDeclaredMethod("setDefaultDataSubId", Int::class.javaPrimitiveType)
+                method.isAccessible = true
+                method.invoke(subManager, subId)
+                success = true
+            }
+        } catch (e: Exception) {
+            // Requires system permission
+        }
+
+        return success
     }
 }
 

@@ -15,11 +15,11 @@ class TelemetryService {
   bool isCharging = false;
   
   // Network Interface Breakdown
-  String localIp = '192.168.43.1';
-  String hotspotIp = '192.168.43.1';
+  String localIp = '192.168.60.21';
+  String hotspotIp = '192.168.60.21';
   String wifiIp = '';
   String cellularIp = '';
-  String activeNetworkLabel = 'Vivo Hotspot (192.168.43.1)';
+  String activeNetworkLabel = 'Vivo Hotspot (192.168.60.21)';
   bool isHotspotBroadcasting = false;
 
   // Cache of last broadcasted values to prevent redundant radio wakeups
@@ -116,8 +116,8 @@ class TelemetryService {
           final ip = addr.address;
           if (ip.startsWith('127.')) continue;
 
-          // Hotspot interface patterns on Android (ap0, wlan1, softap, or 192.168.43.x)
-          if (name.contains('ap') || name.contains('softap') || name.contains('tether') || ip.startsWith('192.168.43.')) {
+          // Hotspot interface patterns on Android (ap0, wlan1, softap, 192.168.60.x or 192.168.43.x)
+          if (name.contains('ap') || name.contains('softap') || name.contains('tether') || ip.startsWith('192.168.60.') || ip.startsWith('192.168.43.')) {
             foundHotspot = ip;
           } else if (name.contains('wlan0') || (!name.contains('rmnet') && !name.contains('ccmni') && (ip.startsWith('192.168.') || ip.startsWith('10.0.') || ip.startsWith('172.')))) {
             // Wi-Fi Client connected to a router
@@ -139,17 +139,17 @@ class TelemetryService {
         } catch (_) {}
       }
 
-      hotspotIp = foundHotspot ?? '192.168.43.1';
+      hotspotIp = foundHotspot ?? '192.168.60.21';
       wifiIp = foundWifi ?? '';
       cellularIp = foundCellular ?? '';
 
       // Set primary pairing IP priority:
-      // 1. Hotspot is ACTIVE -> Always 192.168.43.1 (Fixed & Permanent)
+      // 1. Hotspot is ACTIVE -> Vivo Hotspot IP
       // 2. Wi-Fi Client is ACTIVE -> Home/Office Router IP
       // 3. Fallback -> Hotspot default
       if (isHotspotBroadcasting || foundHotspot != null) {
         localIp = hotspotIp;
-        activeNetworkLabel = 'Vivo Hotspot Direct (192.168.43.1)';
+        activeNetworkLabel = 'Vivo Hotspot Direct ($localIp)';
       } else if (wifiIp.isNotEmpty) {
         localIp = wifiIp;
         activeNetworkLabel = 'Wi-Fi LAN ($wifiIp)';
@@ -158,7 +158,7 @@ class TelemetryService {
         activeNetworkLabel = 'Standby Hotspot ($hotspotIp)';
       }
     } catch (_) {
-      localIp = '192.168.43.1';
+      localIp = '192.168.60.21';
     }
   }
 }

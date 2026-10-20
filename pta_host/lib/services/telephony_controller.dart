@@ -302,19 +302,65 @@ class TelephonyController {
     debugPrint('[TELEPHONY] Setting mobile data: $enabled');
     final val = enabled ? '1' : '0';
     final action = enabled ? 'enable' : 'disable';
+
+    // Tier 1: Try native MethodChannel (succeeds if WRITE_SECURE_SETTINGS is granted)
+    try {
+      final nativeOk = await _channel.invokeMethod<bool>('setMobileData', {'enabled': enabled});
+      if (nativeOk == true) {
+        debugPrint('[TELEPHONY] ✅ Mobile data toggled via Native MethodChannel');
+      }
+    } catch (_) {}
+
+    // Auto-check and reconnect ADB if disconnected
+    if (!isAdbConnected) {
+      await checkAndConnectAdb();
+    }
+
+    // Tier 2: Privileged shell execution via local socket / ADB
     final cmd = 'cmd phone data $action; svc data $action; settings put global mobile_data $val; settings put global mobile_data1 $val; settings put global mobile_data2 $val';
     await executePrivilegedShell(cmd);
+
+    // Verify
     final verify = await executePrivilegedShell('settings get global mobile_data');
-    return verify.trim() == val || verify.trim().endsWith(val);
+    final success = verify.trim() == val || verify.trim().endsWith(val);
+    if (!success && !isAdbConnected) {
+      debugPrint('[TELEPHONY-WARN] ⚠️ Mobile data change could not be verified. ADB is disconnected. Run: adb shell pm grant com.pta.host android.permission.WRITE_SECURE_SETTINGS');
+    } else {
+      debugPrint('[TELEPHONY] ✅ Mobile data state successfully set to $enabled');
+    }
+    return success;
   }
 
   /// Sets the active default mobile data SIM subscription on Vivo S1
   Future<bool> setDataSim(int subId) async {
     debugPrint('[TELEPHONY] Setting data SIM subId: $subId');
+
+    // Tier 1: Try native MethodChannel (succeeds if WRITE_SECURE_SETTINGS is granted)
+    try {
+      final nativeOk = await _channel.invokeMethod<bool>('setDataSim', {'subId': subId});
+      if (nativeOk == true) {
+        debugPrint('[TELEPHONY] ✅ Data SIM subId set via Native MethodChannel');
+      }
+    } catch (_) {}
+
+    // Auto-check and reconnect ADB if disconnected
+    if (!isAdbConnected) {
+      await checkAndConnectAdb();
+    }
+
+    // Tier 2: Privileged shell execution via local socket / ADB
     final cmd = 'service call isub 33 i32 $subId; settings put global user_preferred_data_sub $subId; settings put global multi_sim_data_call $subId';
     await executePrivilegedShell(cmd);
+
+    // Verify
     final verify = await executePrivilegedShell('settings get global multi_sim_data_call');
-    return verify.trim() == subId.toString();
+    final success = verify.trim() == subId.toString();
+    if (!success && !isAdbConnected) {
+      debugPrint('[TELEPHONY-WARN] ⚠️ Data SIM change could not be verified. ADB is disconnected. Run: adb shell pm grant com.pta.host android.permission.WRITE_SECURE_SETTINGS');
+    } else {
+      debugPrint('[TELEPHONY] ✅ Data SIM successfully switched to subId $subId');
+    }
+    return success;
   }
 
   /// Retrieves real-time cellular data state and SIM card configuration

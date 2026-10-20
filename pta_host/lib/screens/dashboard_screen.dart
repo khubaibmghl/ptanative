@@ -458,7 +458,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                 borderRadius: BorderRadius.circular(10),
               ),
               child: const Text(
-                '💡 Tip: On Vivo Hotspot, the address is ALWAYS 192.168.43.1. Your iPhone auto-locks to this address with zero typing needed.',
+                '💡 Tip: On Vivo Hotspot, the address is ALWAYS 192.168.60.21. Your iPhone auto-locks to this address with zero typing needed.',
                 style: TextStyle(fontSize: 11, color: Colors.black87),
               ),
             ),
@@ -606,7 +606,7 @@ class _DashboardScreenState extends State<DashboardScreen> {
                       ),
                       const SizedBox(height: 2),
                       Text(
-                        active ? 'AP Gateway: 192.168.43.1 • iPhone Auto-Sync Ready' : 'Hotspot is off. Tap below to start tethering.',
+                        active ? 'AP Gateway: 192.168.60.21 • iPhone Auto-Sync Ready' : 'Hotspot is off. Tap below to start tethering.',
                         style: TextStyle(fontSize: 12, color: Colors.white.withValues(alpha: 0.7)),
                       ),
                     ],

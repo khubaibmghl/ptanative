@@ -58,7 +58,7 @@ class RelayClient {
   static final RelayClient instance = RelayClient._init();
   RelayClient._init();
 
-  String hostIp = '192.168.43.1';
+  String hostIp = '192.168.60.21';
   int hostPort = 8080;
 
   WebSocketChannel? _channel;
@@ -95,7 +95,7 @@ class RelayClient {
   final VoiceTunnelService voiceTunnel = VoiceTunnelService();
 
   List<SavedConnection> savedConnections = [
-    SavedConnection(id: 'hotspot_default', name: 'Vivo S1 Hotspot', ip: '192.168.43.1', port: 8080, isDefaultHotspot: true),
+    SavedConnection(id: 'hotspot_default', name: 'Vivo S1 Hotspot', ip: '192.168.60.21', port: 8080, isDefaultHotspot: true),
     SavedConnection(id: 'home_wifi', name: 'Home Wi-Fi', ip: '192.168.23.68', port: 8080, isDefaultHotspot: false),
   ];
 
@@ -106,10 +106,27 @@ class RelayClient {
       if (raw != null && raw.isNotEmpty) {
         final List<dynamic> list = jsonDecode(raw);
         savedConnections = list.map((item) => SavedConnection.fromJson(Map<String, dynamic>.from(item))).toList();
+        // Auto-migrate legacy 192.168.43.1 hotspot record to 192.168.60.21
+        bool migrated = false;
+        for (var i = 0; i < savedConnections.length; i++) {
+          if (savedConnections[i].id == 'hotspot_default' || (savedConnections[i].isDefaultHotspot && savedConnections[i].ip == '192.168.43.1')) {
+            savedConnections[i] = SavedConnection(
+              id: 'hotspot_default',
+              name: 'Vivo S1 Hotspot',
+              ip: '192.168.60.21',
+              port: savedConnections[i].port,
+              isDefaultHotspot: true,
+            );
+            migrated = true;
+          }
+        }
+        if (migrated) {
+          await saveSavedConnections();
+        }
       }
       if (savedConnections.isEmpty) {
         savedConnections = [
-          SavedConnection(id: 'hotspot_default', name: 'Vivo S1 Hotspot', ip: '192.168.43.1', port: 8080, isDefaultHotspot: true),
+          SavedConnection(id: 'hotspot_default', name: 'Vivo S1 Hotspot', ip: '192.168.60.21', port: 8080, isDefaultHotspot: true),
           SavedConnection(id: 'home_wifi', name: 'Home Wi-Fi', ip: '192.168.23.68', port: 8080, isDefaultHotspot: false),
         ];
       }
@@ -132,7 +149,7 @@ class RelayClient {
       name: name.trim().isNotEmpty ? name.trim() : cleanIp,
       ip: cleanIp,
       port: port,
-      isDefaultHotspot: cleanIp == '192.168.43.1',
+      isDefaultHotspot: cleanIp == '192.168.60.21' || cleanIp == '192.168.60.221' || cleanIp == '192.168.43.1',
     );
     savedConnections.add(newConn);
     await saveSavedConnections();
@@ -172,7 +189,13 @@ class RelayClient {
   Future<void> init() async {
     await loadSavedConnections();
     final prefs = await SharedPreferences.getInstance();
-    hostIp = prefs.getString('host_ip') ?? '192.168.43.1';
+    final savedIp = prefs.getString('host_ip');
+    if (savedIp == null || savedIp == '192.168.43.1') {
+      hostIp = '192.168.60.21';
+      await prefs.setString('host_ip', hostIp);
+    } else {
+      hostIp = savedIp;
+    }
     hostPort = prefs.getInt('host_port') ?? 8080;
     cloudRelayUrl = prefs.getString('cloud_url') ?? '';
     pairingKey = prefs.getString('pairing_key') ?? 'pta_native_default';
@@ -238,13 +261,16 @@ class RelayClient {
   Future<String?> probeDirectGateway() async {
     if (_isConnected) return hostIp;
     try {
-      // 1. Auto-detect if connected to Vivo S1 Hotspot (192.168.43.x)
+      // 1. Auto-detect if connected to Vivo S1 Hotspot (192.168.60.x or 192.168.43.x)
       try {
         final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
         for (final iface in interfaces) {
           for (final addr in iface.addresses) {
-            if (addr.address.startsWith('192.168.43.')) {
-              logDiagnostic('⚡ Connected to Vivo S1 Hotspot subnet (192.168.43.x). Auto-locking 192.168.43.1!');
+            if (addr.address.startsWith('192.168.60.')) {
+              logDiagnostic('⚡ Connected to Vivo S1 Hotspot subnet (192.168.60.x). Auto-locking 192.168.60.21!');
+              return '192.168.60.21';
+            } else if (addr.address.startsWith('192.168.43.')) {
+              logDiagnostic('⚡ Connected to Vivo S1 Hotspot legacy subnet (192.168.43.x). Auto-locking 192.168.43.1!');
               return '192.168.43.1';
             }
           }
@@ -252,7 +278,7 @@ class RelayClient {
       } catch (_) {}
 
       // 2. Direct gateway probes
-      final candidateIps = <String>{'192.168.43.1', '192.168.23.1', '192.168.1.1'};
+      final candidateIps = <String>{'192.168.60.21', '192.168.60.221', '192.168.60.1', '192.168.43.1', '192.168.23.1', '192.168.1.1'};
       try {
         final interfaces = await NetworkInterface.list(type: InternetAddressType.IPv4);
         for (final iface in interfaces) {
@@ -304,6 +330,9 @@ class RelayClient {
       socket.send(msg, InternetAddress('255.255.255.255'), 8081);
 
       const commonHotspotGateways = [
+        '192.168.60.21',
+        '192.168.60.221',
+        '192.168.60.1',
         '192.168.43.1',
         '192.168.170.1',
         '192.168.23.1',

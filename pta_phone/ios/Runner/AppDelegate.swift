@@ -20,7 +20,7 @@ import UserNotifications
   private var lastActivityDate: Date = Date()
   private let maxInactivityDuration: TimeInterval = 7200.0 // 2 Hours (7200 seconds)
   private var inactivityCheckTimer: Timer?
-  private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.43.1"
+  private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.60.21"
   private var currentHostPort: Int = UserDefaults.standard.integer(forKey: "flutter.host_port") == 0 ? 8080 : UserDefaults.standard.integer(forKey: "flutter.host_port")
   private var isCallActive: Bool = false
 

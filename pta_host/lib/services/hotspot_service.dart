@@ -47,7 +47,7 @@ class HotspotService {
       _statusController.add(isHotspotActive);
       server.logEvent(
         'Hotspot State',
-        active ? 'Vivo S1 Hotspot Active (192.168.43.1)' : 'Hotspot Disabled',
+        active ? 'Vivo S1 Hotspot Active (192.168.60.21)' : 'Hotspot Disabled',
         active ? ActivityType.success : ActivityType.info,
       );
     }

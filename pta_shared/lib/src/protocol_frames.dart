@@ -341,7 +341,7 @@ class SavedConnection {
   factory SavedConnection.fromJson(Map<String, dynamic> json) => SavedConnection(
         id: json['id'] as String? ?? '',
         name: json['name'] as String? ?? 'Host',
-        ip: json['ip'] as String? ?? '192.168.43.1',
+        ip: json['ip'] as String? ?? '192.168.60.21',
         port: json['port'] as int? ?? 8080,
         isDefaultHotspot: json['isDefaultHotspot'] as bool? ?? false,
       );
