@@ -31,6 +31,8 @@ class CallLogModel {
     required this.timestamp,
   });
 
+  String get serviceLabel => serviceType == ServiceType.whatsapp ? 'WhatsApp' : 'Zong GSM';
+
   String get durationFormatted {
     final m = durationSeconds ~/ 60;
     final s = durationSeconds % 60;

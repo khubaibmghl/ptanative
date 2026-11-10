@@ -137,7 +137,7 @@ class _KeypadScreenState extends State<KeypadScreen> {
     if (numberToDial.isEmpty) {
       // Standard Apple Phone behavior: If dialer is empty, populate last dialed number
       final logs = await DatabaseHelper.instance.getCallLogs();
-      final lastOutgoing = logs.where((l) => l.type == CallType.outgoing).firstOrNull;
+      final lastOutgoing = logs.where((l) => l.callType == CallType.outgoing).firstOrNull;
       if (lastOutgoing != null && lastOutgoing.remoteNumber.isNotEmpty) {
         if (mounted) {
           HapticFeedback.selectionClick();

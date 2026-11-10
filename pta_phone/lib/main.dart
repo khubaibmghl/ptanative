@@ -500,8 +500,9 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
           ),
         ],
       ),
-    );
-  }
+    ),
+  );
+}
 
   /// Sleek iOS Dynamic Island In-Call Capsule Pill when call is minimized
   Widget _buildDynamicIslandCallPill(ActiveCallInfo callInfo) {

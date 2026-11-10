@@ -397,7 +397,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
           context: context,
           name: displayName,
           number: log.remoteNumber,
-          label: log.serviceType.isNotEmpty ? log.serviceType : 'Zong GSM',
+          label: log.serviceLabel,
           onZongGsmCall: () => RelayClient.instance.dialNumber(log.remoteNumber),
           onZongSms: () {
             final norm = PhoneNumberNormalizer.normalize(log.remoteNumber);
@@ -456,7 +456,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
                   Row(
                     children: [
                       Text(
-                        isMissed ? '↙ Missed' : '$arrow ${log.serviceType.isNotEmpty ? log.serviceType : "Zong GSM"}',
+                        isMissed ? '↙ Missed' : '$arrow ${log.serviceLabel}',
                         style: TextStyle(
                           color: isMissed ? const Color(0xFFFF453A) : LiquidGlassTheme.textSecondary,
                           fontSize: 13,

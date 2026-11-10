@@ -434,6 +434,16 @@ class DatabaseHelper {
     }).toList();
   }
 
+  Future<void> clearCallLogs() async {
+    final db = await database;
+    await db.delete('call_logs');
+  }
+
+  Future<void> deleteCallLog(int id) async {
+    final db = await database;
+    await db.delete('call_logs', where: 'id = ?', whereArgs: [id]);
+  }
+
   Future<List<CallLogModel>> getCallLogsForNumbers(List<String> rawNumbers) async {
     final allLogs = await getCallLogs();
     final normalizedSet = rawNumbers
