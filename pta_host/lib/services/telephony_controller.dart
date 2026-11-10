@@ -213,8 +213,54 @@ class TelephonyController {
     }
   }
 
-  /// Transmits DTMF dual-tone keypress during an active call
-  Future<bool> sendDtmf(String digit) async {
+  int _lastDtmfSeq = -1;
+  int _lastDtmfTimestamp = 0;
+
+  /// Retrieves current cellular call audio route (SPEAKER, EARPIECE, BLUETOOTH)
+  Future<Map<String, dynamic>> getAudioRoute() async {
+    try {
+      final res = await _channel.invokeMethod<Map<dynamic, dynamic>>('getAudioRoute');
+      if (res != null) {
+        return Map<String, dynamic>.from(res);
+      }
+    } catch (e) {
+      debugPrint('[TELEPHONY] getAudioRoute error: $e');
+    }
+    return {
+      'currentRoute': 'EARPIECE',
+      'bluetoothConnected': false,
+      'bluetoothName': '',
+      'availableRoutes': ['EARPIECE', 'SPEAKER'],
+    };
+  }
+
+  /// Sets cellular call audio route (SPEAKER, EARPIECE, BLUETOOTH)
+  Future<Map<String, dynamic>> setAudioRoute(String route) async {
+    try {
+      final res = await _channel.invokeMethod<Map<dynamic, dynamic>>('setAudioRoute', {'route': route});
+      if (res != null) {
+        return Map<String, dynamic>.from(res);
+      }
+    } catch (e) {
+      debugPrint('[TELEPHONY] setAudioRoute error: $e');
+    }
+    return await getAudioRoute();
+  }
+
+  /// Transmits DTMF dual-tone keypress during an active call with sequence deduplication
+  Future<bool> sendDtmf(String digit, {int? seq}) async {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    if (seq != null && seq == _lastDtmfSeq) {
+      debugPrint('[TELEPHONY] ⚡ Duplicate DTMF sequence ignored: seq=$seq, digit=$digit');
+      return true;
+    }
+    if (now - _lastDtmfTimestamp < 140) {
+      debugPrint('[TELEPHONY] ⚡ Debounced rapid DTMF press (${now - _lastDtmfTimestamp}ms)');
+      return true;
+    }
+    if (seq != null) _lastDtmfSeq = seq;
+    _lastDtmfTimestamp = now;
+
     try {
       if (isAdbConnected) {
         final code = switch (digit) {
@@ -234,7 +280,6 @@ class TelephonyController {
         };
         if (code != null) {
           await Process.run('adb', ['-s', adbDeviceId, 'shell', 'input', 'keyevent', code]);
-          return true;
         }
       }
       final res = await _channel.invokeMethod<bool>('sendDtmf', {'digit': digit});

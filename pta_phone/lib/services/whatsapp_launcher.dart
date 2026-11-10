@@ -5,27 +5,47 @@ import 'package:pta_shared/pta_shared.dart';
 import '../theme/liquid_glass_theme.dart';
 
 class WhatsAppLauncher {
+  /// Helper to convert any raw phone number into WhatsApp international digit format
+  static String formatWhatsAppNumber(String rawNumber) {
+    final trimmed = rawNumber.trim();
+    final cleanDigits = trimmed.replaceAll(RegExp(r'\D'), '');
+    if (trimmed.startsWith('+')) {
+      return cleanDigits;
+    }
+    final norm = PhoneNumberNormalizer.normalize(trimmed);
+    if (norm.startsWith('92')) {
+      return norm;
+    } else if (norm.startsWith('3') && norm.length == 10) {
+      return '92$norm';
+    } else if (cleanDigits.length == 11 && cleanDigits.startsWith('03')) {
+      return '92${cleanDigits.substring(1)}';
+    }
+    return cleanDigits.isNotEmpty ? cleanDigits : norm;
+  }
+
   /// Launches native WhatsApp voice call
   static Future<bool> startAudioCall(String rawNumber) async {
-    final norm = PhoneNumberNormalizer.normalize(rawNumber);
-    final fullNumber = norm.startsWith('92') ? norm : '92$norm';
+    final fullNumber = formatWhatsAppNumber(rawNumber);
     final uri = Uri.parse('whatsapp://call?phone=$fullNumber');
-    if (await canLaunchUrl(uri)) {
-      return await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    try {
+      if (await canLaunchUrl(uri)) {
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {}
     final fallback = Uri.parse('https://wa.me/$fullNumber');
     return await launchUrl(fallback, mode: LaunchMode.externalApplication);
   }
 
   /// Launches native WhatsApp chat conversation
   static Future<bool> startChat(String rawNumber, {String? text}) async {
-    final norm = PhoneNumberNormalizer.normalize(rawNumber);
-    final fullNumber = norm.startsWith('92') ? norm : '92$norm';
+    final fullNumber = formatWhatsAppNumber(rawNumber);
     final query = text != null ? '?text=${Uri.encodeComponent(text)}' : '';
     final uri = Uri.parse('whatsapp://send?phone=$fullNumber$query');
-    if (await canLaunchUrl(uri)) {
-      return await launchUrl(uri, mode: LaunchMode.externalApplication);
-    }
+    try {
+      if (await canLaunchUrl(uri)) {
+        return await launchUrl(uri, mode: LaunchMode.externalApplication);
+      }
+    } catch (_) {}
     final fallback = Uri.parse('https://wa.me/$fullNumber$query');
     return await launchUrl(fallback, mode: LaunchMode.externalApplication);
   }

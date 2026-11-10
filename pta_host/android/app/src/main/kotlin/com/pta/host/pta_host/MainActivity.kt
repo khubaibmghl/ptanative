@@ -4,9 +4,15 @@ import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
 import android.content.IntentFilter
+import android.bluetooth.BluetoothAdapter
+import android.bluetooth.BluetoothDevice
+import android.bluetooth.BluetoothHeadset
+import android.bluetooth.BluetoothProfile
+import android.media.AudioDeviceInfo
 import android.media.AudioManager
 import android.media.AudioRecordingConfiguration
 import android.media.MediaRecorder
+import android.media.ToneGenerator
 import android.net.Uri
 import android.os.Build
 import android.os.FileObserver
@@ -31,10 +37,12 @@ class MainActivity : FlutterActivity() {
     private val EVENT_CHANNEL = "com.pta.host/telephony_events"
     private var eventSink: EventChannel.EventSink? = null
     private var phoneStateReceiver: BroadcastReceiver? = null
+    private var audioRouteReceiver: BroadcastReceiver? = null
     private var recordingFileObserver: FileObserver? = null
     private var audioRecordingCallback: AudioManager.AudioRecordingCallback? = null
     private var isCallMonitoringActive = false
     private var lastEmittedActiveTimestamp = 0L
+    private var toneGenerator: ToneGenerator? = null
 
     override fun configureFlutterEngine(flutterEngine: FlutterEngine) {
         super.configureFlutterEngine(flutterEngine)
@@ -69,6 +77,13 @@ class MainActivity : FlutterActivity() {
                     requestBatteryOptimization()
                     result.success(true)
                 }
+                "getAudioRoute" -> {
+                    result.success(getAudioRouteNative())
+                }
+                "setAudioRoute" -> {
+                    val route = call.argument<String>("route") ?: "EARPIECE"
+                    result.success(setAudioRouteNative(route))
+                }
                 "enableAudioRouting" -> {
                     val enable = call.argument<Boolean>("enable") ?: false
                     enableCallAudioRouting(enable)
@@ -102,6 +117,10 @@ class MainActivity : FlutterActivity() {
                 "setDataSim" -> {
                     val subId = call.argument<Int>("subId") ?: -1
                     result.success(setDataSimNative(subId))
+                }
+                "moveToBackground" -> {
+                    moveTaskToBack(true)
+                    result.success(true)
                 }
                 else -> result.notImplemented()
             }
@@ -219,6 +238,29 @@ class MainActivity : FlutterActivity() {
             addAction("android.provider.Telephony.SMS_RECEIVED")
         }
         registerReceiver(phoneStateReceiver, filter)
+
+        // Register hardware Audio Route & Bluetooth SCO change listener
+        try {
+            val audioFilter = IntentFilter().apply {
+                addAction(AudioManager.ACTION_SCO_AUDIO_STATE_UPDATED)
+                addAction(AudioManager.ACTION_AUDIO_BECOMING_NOISY)
+                addAction(BluetoothHeadset.ACTION_CONNECTION_STATE_CHANGED)
+                addAction(BluetoothHeadset.ACTION_AUDIO_STATE_CHANGED)
+            }
+            val aReceiver = object : BroadcastReceiver() {
+                override fun onReceive(context: Context?, intent: Intent?) {
+                    val updated = getAudioRouteNative()
+                    val payload = HashMap<String, Any>()
+                    payload["type"] = "AUDIO_ROUTE"
+                    payload.putAll(updated)
+                    eventSink?.success(payload)
+                }
+            }
+            registerReceiver(aReceiver, audioFilter)
+            audioRouteReceiver = aReceiver
+        } catch (e: Exception) {
+            android.util.Log.e("PTA_AUDIO", "Error registering audioRouteReceiver: ${e.message}")
+        }
     }
 
     private fun unregisterPhoneStateReceiver() {
@@ -228,6 +270,12 @@ class MainActivity : FlutterActivity() {
                 unregisterReceiver(it)
             } catch (_: Exception) {}
             phoneStateReceiver = null
+        }
+        audioRouteReceiver?.let {
+            try {
+                unregisterReceiver(it)
+            } catch (_: Exception) {}
+            audioRouteReceiver = null
         }
     }
 
@@ -481,8 +529,150 @@ class MainActivity : FlutterActivity() {
         }
     }
 
+    private fun getAudioRouteNative(): Map<String, Any> {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager
+        val result = HashMap<String, Any>()
+        if (audioManager == null) {
+            result["currentRoute"] = "EARPIECE"
+            result["bluetoothConnected"] = false
+            result["bluetoothName"] = ""
+            result["availableRoutes"] = listOf("EARPIECE", "SPEAKER")
+            return result
+        }
+
+        var isBtConnected = false
+        var btDeviceName = ""
+
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            val devices = audioManager.getDevices(AudioManager.GET_DEVICES_OUTPUTS)
+            for (d in devices) {
+                if (d.type == AudioDeviceInfo.TYPE_BLUETOOTH_SCO ||
+                    d.type == AudioDeviceInfo.TYPE_BLUETOOTH_A2DP ||
+                    (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && d.type == AudioDeviceInfo.TYPE_BLE_HEADSET)) {
+                    isBtConnected = true
+                    btDeviceName = d.productName?.toString() ?: "Bluetooth Audio"
+                    break
+                }
+            }
+        }
+
+        val available = ArrayList<String>()
+        available.add("EARPIECE")
+        available.add("SPEAKER")
+        if (isBtConnected) {
+            available.add("BLUETOOTH")
+        }
+
+        val currentRoute = when {
+            audioManager.isSpeakerphoneOn -> "SPEAKER"
+            audioManager.isBluetoothScoOn -> "BLUETOOTH"
+            else -> "EARPIECE"
+        }
+
+        result["currentRoute"] = currentRoute
+        result["bluetoothConnected"] = isBtConnected
+        result["bluetoothName"] = btDeviceName
+        result["availableRoutes"] = available
+        return result
+    }
+
+    private fun setAudioRouteNative(route: String): Map<String, Any> {
+        val audioManager = getSystemService(Context.AUDIO_SERVICE) as? AudioManager ?: return getAudioRouteNative()
+        android.util.Log.d("PTA_AUDIO", "setAudioRouteNative requested: $route")
+
+        when (route.uppercase()) {
+            "SPEAKER" -> {
+                audioManager.mode = AudioManager.MODE_IN_CALL
+                if (audioManager.isBluetoothScoOn) {
+                    audioManager.stopBluetoothSco()
+                    audioManager.isBluetoothScoOn = false
+                }
+                audioManager.isSpeakerphoneOn = true
+                try {
+                    Runtime.getRuntime().exec(arrayOf("cmd", "telecom", "set-audio-route", "4"))
+                } catch (_: Exception) {}
+            }
+            "BLUETOOTH" -> {
+                audioManager.mode = AudioManager.MODE_IN_CALL
+                audioManager.isSpeakerphoneOn = false
+                audioManager.startBluetoothSco()
+                audioManager.isBluetoothScoOn = true
+                try {
+                    Runtime.getRuntime().exec(arrayOf("cmd", "telecom", "set-audio-route", "2"))
+                } catch (_: Exception) {}
+            }
+            "EARPIECE" -> {
+                audioManager.mode = AudioManager.MODE_IN_CALL
+                audioManager.isSpeakerphoneOn = false
+                if (audioManager.isBluetoothScoOn) {
+                    audioManager.stopBluetoothSco()
+                    audioManager.isBluetoothScoOn = false
+                }
+                try {
+                    Runtime.getRuntime().exec(arrayOf("cmd", "telecom", "set-audio-route", "1"))
+                } catch (_: Exception) {}
+            }
+        }
+
+        val updated = getAudioRouteNative()
+        runOnUiThread {
+            val payload = HashMap<String, Any>()
+            payload["type"] = "AUDIO_ROUTE"
+            payload.putAll(updated)
+            eventSink?.success(payload)
+        }
+        return updated
+    }
+
     private fun sendDtmfNative(digit: String): Boolean {
-        // Can be routed through InCallService / TelecomManager if active
+        android.util.Log.d("PTA_DTMF", "sendDtmfNative: digit=$digit")
+        val tone = when (digit) {
+            "0" -> ToneGenerator.TONE_DTMF_0
+            "1" -> ToneGenerator.TONE_DTMF_1
+            "2" -> ToneGenerator.TONE_DTMF_2
+            "3" -> ToneGenerator.TONE_DTMF_3
+            "4" -> ToneGenerator.TONE_DTMF_4
+            "5" -> ToneGenerator.TONE_DTMF_5
+            "6" -> ToneGenerator.TONE_DTMF_6
+            "7" -> ToneGenerator.TONE_DTMF_7
+            "8" -> ToneGenerator.TONE_DTMF_8
+            "9" -> ToneGenerator.TONE_DTMF_9
+            "*" -> ToneGenerator.TONE_DTMF_S
+            "#" -> ToneGenerator.TONE_DTMF_P
+            else -> -1
+        }
+        if (tone != -1) {
+            try {
+                if (toneGenerator == null) {
+                    toneGenerator = ToneGenerator(AudioManager.STREAM_VOICE_CALL, 100)
+                }
+                toneGenerator?.startTone(tone, 200)
+            } catch (e: Exception) {
+                android.util.Log.e("PTA_DTMF", "ToneGenerator error: ${e.message}")
+            }
+        }
+
+        // Tier 2: Shell input keyevent simulation
+        val keycode = when (digit) {
+            "0" -> 7
+            "1" -> 8
+            "2" -> 9
+            "3" -> 10
+            "4" -> 11
+            "5" -> 12
+            "6" -> 13
+            "7" -> 14
+            "8" -> 15
+            "9" -> 16
+            "*" -> 17
+            "#" -> 18
+            else -> -1
+        }
+        if (keycode != -1) {
+            try {
+                Runtime.getRuntime().exec(arrayOf("input", "keyevent", keycode.toString()))
+            } catch (_: Exception) {}
+        }
         return true
     }
 

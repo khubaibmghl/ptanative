@@ -23,6 +23,7 @@ import UserNotifications
   private var currentHostIp: String = UserDefaults.standard.string(forKey: "flutter.host_ip") ?? "192.168.60.221"
   private var currentHostPort: Int = UserDefaults.standard.integer(forKey: "flutter.host_port") == 0 ? 8080 : UserDefaults.standard.integer(forKey: "flutter.host_port")
   private var isCallActive: Bool = false
+  private var lastIncomingCallUdpTimestamp: TimeInterval = 0
 
   override func application(
     _ application: UIApplication,
@@ -47,23 +48,43 @@ import UserNotifications
     UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound, .badge]) { granted, error in
       print("[AppDelegate] Notification authorization granted: \(granted)")
     }
+
+    // Missed Call Actions (Call Back & SMS)
     let callBackAction = UNNotificationAction(
       identifier: "CALL_BACK_ACTION",
       title: "Call Back",
       options: [.foreground]
     )
+    let messageAction = UNNotificationAction(
+      identifier: "MESSAGE_ACTION",
+      title: "Message",
+      options: [.foreground]
+    )
     let missedCategory = UNNotificationCategory(
       identifier: "MISSED_CALL",
-      actions: [callBackAction],
+      actions: [callBackAction, messageAction],
       intentIdentifiers: [],
-      options: []
+      options: [.customDismissAction]
+    )
+
+    // Incoming Call Actions (Answer & Decline like WhatsApp / Phone)
+    let answerAction = UNNotificationAction(
+      identifier: "ANSWER_ACTION",
+      title: "Answer",
+      options: [.foreground]
+    )
+    let declineAction = UNNotificationAction(
+      identifier: "DECLINE_ACTION",
+      title: "Decline",
+      options: [.destructive]
     )
     let incomingCategory = UNNotificationCategory(
       identifier: "INCOMING_CALL",
-      actions: [],
+      actions: [answerAction, declineAction],
       intentIdentifiers: [],
-      options: []
+      options: [.customDismissAction]
     )
+
     UNUserNotificationCenter.current().setNotificationCategories([missedCategory, incomingCategory])
   }
 
@@ -244,10 +265,13 @@ import UserNotifications
     logNativeDiagnostic(tag: "MEDIA-LOST", message: "⚠️ Media Services Were Lost...")
   }
 
+  private var backgroundHeartbeatTimer: DispatchSourceTimer?
+  private var heartbeatCount: Int = 0
+
   func audioPlayerDidFinishPlaying(_ player: AVAudioPlayer, successfully flag: Bool) {
     if player == silentAudioPlayer {
-      logNativeDiagnostic(tag: "KEEP-ALIVE-PLAYER", message: "Silent keep-alive player finished chunk (success: \(flag)). Looping...")
       silentAudioPlayer?.play()
+      pulseNativeHeartbeat()
     }
   }
 
@@ -258,6 +282,64 @@ import UserNotifications
       DispatchQueue.main.asyncAfter(deadline: .now() + 2.0) { [weak self] in
         self?.ensureKeepAlivePlaying()
       }
+    }
+  }
+
+  func pulseNativeHeartbeat() {
+    heartbeatCount += 1
+    let remaining = UIApplication.shared.backgroundTimeRemaining
+    let isBg = UIApplication.shared.applicationState == .background
+    let isPlaying = silentAudioPlayer?.isPlaying ?? false
+
+    // Throttled diagnostic log every 4 chunks (~60s) or for first 2 chunks
+    if heartbeatCount <= 2 || heartbeatCount % 4 == 0 {
+      logNativeDiagnostic(
+        tag: "BG-HEARTBEAT",
+        message: "🩺 iOS Background Heartbeat #\(heartbeatCount). RemainingTime: \(remaining == Double.greatestFiniteMagnitude ? "Unlimited" : "\(Int(remaining))s"), silentPlayerPlaying: \(isPlaying), isCallActive: \(isCallActive)"
+      )
+    }
+
+    checkInactivityTimeout()
+    sendNativeUdpHeartbeat()
+
+    DispatchQueue.main.async { [weak self] in
+      self?.getNativeChannel()?.invokeMethod("onNativeHeartbeatPulse", arguments: [
+        "heartbeatCount": self?.heartbeatCount ?? 0,
+        "isBackground": isBg
+      ])
+    }
+  }
+
+  func sendNativeUdpDatagram(host: String, port: UInt16, payload: String) {
+    guard !host.isEmpty, port > 0 else { return }
+    let sock = socket(AF_INET, SOCK_DGRAM, 0)
+    guard sock >= 0 else { return }
+    defer { close(sock) }
+
+    var broadcast: Int32 = 1
+    setsockopt(sock, SOL_SOCKET, SO_BROADCAST, &broadcast, socklen_t(MemoryLayout<Int32>.size))
+
+    var tv = timeval(tv_sec: 0, tv_usec: 150000) // 150ms timeout
+    setsockopt(sock, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+
+    var addr = sockaddr_in()
+    addr.sin_family = sa_family_t(AF_INET)
+    addr.sin_port = port.bigEndian
+    guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else { return }
+
+    payload.withCString { cStr in
+      _ = withUnsafePointer(to: &addr) { ptr in
+        ptr.withMemoryRebound(to: sockaddr.self, capacity: 1) { sa in
+          sendto(sock, cStr, strlen(cStr), 0, sa, socklen_t(MemoryLayout<sockaddr_in>.size))
+        }
+      }
+    }
+  }
+
+  func sendNativeUdpHeartbeat() {
+    let targets = Set([currentHostIp, "192.168.60.221", "192.168.43.1"].filter { !$0.isEmpty })
+    for ip in targets {
+      sendNativeUdpDatagram(host: ip, port: 8081, payload: "PTA_HEARTBEAT")
     }
   }
 
@@ -273,6 +355,21 @@ import UserNotifications
     inactivityCheckTimer = Timer.scheduledTimer(withTimeInterval: 30.0, repeats: true) { [weak self] _ in
       self?.checkInactivityTimeout()
     }
+
+    backgroundHeartbeatTimer?.cancel()
+    let timer = DispatchSource.makeTimerSource(flags: [], queue: DispatchQueue.global(qos: .utility))
+    timer.schedule(deadline: .now() + 15.0, repeating: 15.0)
+    timer.setEventHandler { [weak self] in
+      guard let self = self else { return }
+      if self.silentAudioPlayer?.isPlaying == false {
+        DispatchQueue.main.async {
+          self.ensureKeepAlivePlaying()
+        }
+      }
+      self.sendNativeUdpHeartbeat()
+    }
+    timer.resume()
+    backgroundHeartbeatTimer = timer
   }
 
   private func checkInactivityTimeout() {
@@ -336,10 +433,10 @@ import UserNotifications
         let silentWavData = createSilentWavData()
         silentAudioPlayer = try AVAudioPlayer(data: silentWavData)
         silentAudioPlayer?.delegate = self
-        silentAudioPlayer?.numberOfLoops = -1
+        silentAudioPlayer?.numberOfLoops = 0 // Chunk-based loop: triggers audioPlayerDidFinishPlaying every 15s to pulse native heartbeat
         silentAudioPlayer?.volume = 0.02
         silentAudioPlayer?.prepareToPlay()
-        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "Initialized silentAudioPlayer with synthetic 44.1kHz WAV. Volume: 0.02")
+        logNativeDiagnostic(tag: "KEEP-ALIVE", message: "Initialized silentAudioPlayer with synthetic 15s WAV chunk. Volume: 0.02")
       }
 
       if silentAudioPlayer?.isPlaying == false {
@@ -356,8 +453,14 @@ import UserNotifications
   private func setupNowPlayingInfo() {
     var nowPlayingInfo = [String: Any]()
     nowPlayingInfo[MPMediaItemPropertyTitle] = "PTA Cellular Relay Active"
-    nowPlayingInfo[MPMediaItemPropertyArtist] = "Vivo S1 • Zong 4G Link"
+    nowPlayingInfo[MPMediaItemPropertyArtist] = "Vivo S1 • HD Voice Link"
     nowPlayingInfo[MPNowPlayingInfoPropertyIsLiveStream] = true
+
+    // Set calling emblem artwork on Lock Screen & Dynamic Island NowPlaying widget
+    if let image = UIImage(named: "CallIcon") ?? UIImage(named: "AppIcon") {
+      nowPlayingInfo[MPMediaItemPropertyArtwork] = MPMediaItemArtwork(boundsSize: image.size) { _ in image }
+    }
+
     MPNowPlayingInfoCenter.default().nowPlayingInfo = nowPlayingInfo
     MPNowPlayingInfoCenter.default().playbackState = .playing
   }
@@ -368,7 +471,7 @@ import UserNotifications
     let bitsPerSample: UInt16 = 16
     let byteRate: UInt32 = sampleRate * UInt32(numChannels) * UInt32(bitsPerSample / 8)
     let blockAlign: UInt16 = numChannels * (bitsPerSample / 8)
-    let numSamples: UInt32 = sampleRate * 2
+    let numSamples: UInt32 = sampleRate * 15 // 15-second chunk ensures regular iOS audio finish callbacks
     let dataSize: UInt32 = numSamples * UInt32(blockAlign)
     let chunkSize: UInt32 = 36 + dataSize
 
@@ -451,6 +554,10 @@ import UserNotifications
 
   private func processIncomingUdpData(_ data: Data) {
     guard let rawStr = String(data: data, encoding: .utf8) else { return }
+    if rawStr.contains("PTA_HEARTBEAT_ACK") {
+      // Received bidirectional ACK from host - confirms Wi-Fi link is alive
+      return
+    }
     print("[NativeUDP] Received datagram on 8081: \(rawStr)")
 
     DispatchQueue.main.async { [weak self] in
@@ -465,16 +572,26 @@ import UserNotifications
             let type = json["type"] as? String else { return }
 
       if type == "RINGING" || type == "INCOMING_RING" {
+        let now = Date().timeIntervalSince1970
         let dataObj = json["data"] as? [String: Any] ?? json
         let number = dataObj["number"] as? String ?? ""
         let name = dataObj["name"] as? String ?? number
-        let callId = dataObj["call_id"] as? String ?? UUID().uuidString
+        let callId = dataObj["call_id"] as? String ?? "pta_call_\(number)"
+        
+        // Show or refresh the collapsed single incoming call notification banner
         self.showIncomingCallNotification(number: number, name: name)
-        self.getNativeChannel()?.invokeMethod("onNativeIncomingCall", arguments: [
-          "number": number,
-          "name": name,
-          "callId": callId
-        ])
+        
+        // Debounce CallKit invocation so the 5x UDP wake burst triggers CallKit only once
+        if now - self.lastIncomingCallUdpTimestamp > 3.0 {
+          self.lastIncomingCallUdpTimestamp = now
+          self.getNativeChannel()?.invokeMethod("onNativeIncomingCall", arguments: [
+            "number": number,
+            "name": name,
+            "callId": callId
+          ])
+        }
+      } else if type == "CALL_ACTIVE" || type == "CALL_DISCONNECTED" || type == "IDLE" {
+        self.dismissIncomingCallNotification()
       }
     }
   }
@@ -521,12 +638,24 @@ import UserNotifications
             result(false)
           }
         } else if call.method == "pingKeepAlive" {
+          if let args = call.arguments as? [String: Any] {
+            if let ip = args["hostIp"] as? String, !ip.isEmpty {
+              self?.currentHostIp = ip
+            }
+            if let port = args["hostPort"] as? Int, port > 0 {
+              self?.currentHostPort = port
+            }
+          }
           self?.resetInactivityTimer()
           self?.ensureKeepAlivePlaying()
+          self?.sendNativeUdpHeartbeat()
           result(true)
         } else if call.method == "setCallActive" {
           let active = call.arguments as? Bool ?? false
           self?.setCallActiveState(active)
+          result(true)
+        } else if call.method == "dismissIncomingCallNotification" {
+          self?.dismissIncomingCallNotification()
           result(true)
         } else {
           result(FlutterMethodNotImplemented)
@@ -705,14 +834,34 @@ import UserNotifications
     }
   }
 
+  private func getCallIconAttachment() -> UNNotificationAttachment? {
+    let tempDir = FileManager.default.temporaryDirectory
+    let fileUrl = tempDir.appendingPathComponent("call_icon.png")
+    if !FileManager.default.fileExists(atPath: fileUrl.path) {
+      if let iconImage = UIImage(named: "CallIcon") ?? UIImage(named: "AppIcon"),
+         let data = iconImage.pngData() {
+        try? data.write(to: fileUrl)
+      }
+    }
+    if FileManager.default.fileExists(atPath: fileUrl.path) {
+      return try? UNNotificationAttachment(identifier: "call_avatar", url: fileUrl, options: nil)
+    }
+    return nil
+  }
+
   func showMissedCallNotification(number: String, name: String) {
     let content = UNMutableNotificationContent()
     content.title = "Missed Call"
     let displayTitle = (name.isEmpty || name == number) ? number : "\(name) (\(number))"
-    content.body = "Missed call from \(displayTitle). Tap to call back."
+    content.subtitle = displayTitle
+    content.body = "Missed call from \(displayTitle) • Tap Call Back to redial"
     content.sound = UNNotificationSound.default
     content.userInfo = ["number": number, "name": name]
     content.categoryIdentifier = "MISSED_CALL"
+
+    if let attachment = getCallIconAttachment() {
+      content.attachments = [attachment]
+    }
 
     let request = UNNotificationRequest(
       identifier: "missed_call_\(Date().timeIntervalSince1970)",
@@ -732,13 +881,22 @@ import UserNotifications
     let content = UNMutableNotificationContent()
     content.title = "Incoming Cellular Call"
     let displayTitle = (name.isEmpty || name == number) ? number : "\(name) (\(number))"
-    content.body = "Incoming call from \(displayTitle)"
+    content.subtitle = displayTitle
+    content.body = "Vivo S1 Cellular Relay • Tap Answer to speak"
     content.sound = UNNotificationSound.default
+    if #available(iOS 15.0, *) {
+      content.interruptionLevel = .timeSensitive
+    }
     content.userInfo = ["number": number, "name": name]
     content.categoryIdentifier = "INCOMING_CALL"
 
+    if let attachment = getCallIconAttachment() {
+      content.attachments = [attachment]
+    }
+
+    // Use a fixed identifier so iOS automatically collapses all burst packets into exactly ONE notification banner
     let request = UNNotificationRequest(
-      identifier: "incoming_\(Date().timeIntervalSince1970)",
+      identifier: "pta_incoming_call_active",
       content: content,
       trigger: nil
     )
@@ -746,9 +904,14 @@ import UserNotifications
       if let error = error {
         print("[AppDelegate] Error posting incoming call notification: \(error)")
       } else {
-        print("[AppDelegate] Successfully posted incoming call notification for \(number)")
+        print("[AppDelegate] Successfully updated incoming call notification for \(number)")
       }
     }
+  }
+
+  func dismissIncomingCallNotification() {
+    UNUserNotificationCenter.current().removeDeliveredNotifications(withIdentifiers: ["pta_incoming_call_active"])
+    UNUserNotificationCenter.current().removePendingNotificationRequests(withIdentifiers: ["pta_incoming_call_active"])
   }
 
   // MARK: - UNUserNotificationCenterDelegate Handlers
@@ -770,9 +933,26 @@ import UserNotifications
     withCompletionHandler completionHandler: @escaping () -> Void
   ) {
     let userInfo = response.notification.request.content.userInfo
-    if let number = userInfo["number"] as? String, !number.isEmpty {
-      print("[NativeBridge] 📞 Missed call notification tapped -> dialing: \(number)")
-      sendDialIntent(number)
+    let actionId = response.actionIdentifier
+    let number = userInfo["number"] as? String ?? ""
+
+    logNativeDiagnostic(tag: "NOTIF-RESPONSE", message: "User responded to notification. Action: \(actionId), Number: \(number)")
+
+    if actionId == "ANSWER_ACTION" {
+      logNativeDiagnostic(tag: "NOTIF-ACTION", message: "🟢 User tapped Answer on incoming call notification")
+      getNativeChannel()?.invokeMethod("onNotificationAnswerCall", arguments: ["number": number])
+    } else if actionId == "DECLINE_ACTION" {
+      logNativeDiagnostic(tag: "NOTIF-ACTION", message: "🔴 User tapped Decline on incoming call notification")
+      dismissIncomingCallNotification()
+      getNativeChannel()?.invokeMethod("onNotificationDeclineCall", arguments: ["number": number])
+    } else if actionId == "CALL_BACK_ACTION" || actionId == UNNotificationDefaultActionIdentifier {
+      if !number.isEmpty {
+        sendDialIntent(number)
+      }
+    } else if actionId == "MESSAGE_ACTION" {
+      if !number.isEmpty {
+        getNativeChannel()?.invokeMethod("onNotificationOpenSms", arguments: ["number": number])
+      }
     }
     completionHandler()
   }

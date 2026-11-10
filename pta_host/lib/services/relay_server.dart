@@ -28,6 +28,7 @@ class RelayServer {
   dynamic telemetryService;
 
   final List<WebSocketChannel> _connectedSockets = [];
+  final Map<WebSocketChannel, String> _socketClientIps = {};
   final List<ActivityLog> activityLogs = [];
   final StreamController<ActivityLog> _activityStream = StreamController<ActivityLog>.broadcast();
 
@@ -84,9 +85,22 @@ class RelayServer {
     try {
       final innerWs = webSocketHandler(
         (WebSocketChannel socket, String? protocol) {
-          _connectedSockets.add(socket);
-          _lastDisconnectTime = 0;
           final clientIp = _lastKnownClientAddress?.address ?? 'Unknown';
+
+          // Prune any previous zombie/stale socket from the same client IP
+          final staleSockets = _connectedSockets.where((s) => _socketClientIps[s] == clientIp).toList();
+          for (final stale in staleSockets) {
+            _connectedSockets.remove(stale);
+            _socketClientIps.remove(stale);
+            try {
+              stale.sink.close(1001, 'Superseded by new connection');
+            } catch (_) {}
+            debugPrint('[HOST-RELAY] 🧹 Pruned superseded zombie socket for $clientIp. Clean active count: ${_connectedSockets.length}');
+          }
+
+          _connectedSockets.add(socket);
+          _socketClientIps[socket] = clientIp;
+          _lastDisconnectTime = 0;
           final connectTime = DateTime.now().millisecondsSinceEpoch;
           int clientPingCount = 0;
           int lastPingReceivedTime = connectTime;
@@ -122,6 +136,7 @@ class RelayServer {
             },
             onDone: () {
               _connectedSockets.remove(socket);
+              _socketClientIps.remove(socket);
               _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
               final durationSec = (_lastDisconnectTime - connectTime) ~/ 1000;
               final idleSincePingMs = _lastDisconnectTime - lastPingReceivedTime;
@@ -136,6 +151,7 @@ class RelayServer {
             },
             onError: (err) {
               _connectedSockets.remove(socket);
+              _socketClientIps.remove(socket);
               _lastDisconnectTime = DateTime.now().millisecondsSinceEpoch;
               final durationSec = (_lastDisconnectTime - connectTime) ~/ 1000;
               final closeCode = socket.closeCode;
@@ -149,7 +165,7 @@ class RelayServer {
             },
           );
         },
-        pingInterval: const Duration(seconds: 45),
+        pingInterval: const Duration(seconds: 15),
       );
 
       FutureOr<Response> wsHandler(Request request) {
@@ -218,6 +234,11 @@ class RelayServer {
               });
               _udpSocket?.send(reply.codeUnits, dg.address, dg.port);
               logEvent('Discovery Beacon', 'Replied to auto-discovery request from ${dg.address.address}', ActivityType.info);
+            } else if (msg == 'PTA_HEARTBEAT' || msg.contains('HEARTBEAT')) {
+              _lastKnownClientAddress = dg.address;
+              _lastDisconnectTime = 0;
+              const ack = 'PTA_HEARTBEAT_ACK';
+              _udpSocket?.send(ack.codeUnits, dg.address, dg.port);
             }
           }
         }
@@ -285,6 +306,7 @@ class RelayServer {
       } catch (_) {}
     }
     _connectedSockets.clear();
+    _socketClientIps.clear();
     await _server?.close(force: true);
     _server = null;
     logEvent('Server Stopped', 'Offline', ActivityType.info);
@@ -443,8 +465,16 @@ class RelayServer {
           break;
         case 'ACTION_DTMF':
           final digit = msg.data['digit']?.toString() ?? '';
-          logEvent('DTMF Keypress', 'Transmitted digit $digit', ActivityType.info);
-          telephonyController.sendDtmf(digit);
+          final seq = msg.data['seq'] as int?;
+          logEvent('DTMF Keypress', 'Transmitted digit $digit (seq: $seq)', ActivityType.info);
+          telephonyController.sendDtmf(digit, seq: seq);
+          break;
+        case 'ACTION_SET_AUDIO_ROUTE':
+          final route = msg.data['route']?.toString() ?? 'EARPIECE';
+          logEvent('Audio Route', 'Setting audio route to $route from iPhone', ActivityType.info);
+          telephonyController.setAudioRoute(route).then((status) {
+            broadcast(RelayMessage(type: 'AUDIO_ROUTE_STATUS', data: status));
+          });
           break;
         case 'ACTION_SEND_SMS':
           final recipient = msg.data['recipient']?.toString() ?? '';
@@ -543,19 +573,43 @@ class RelayServer {
     // 5. DTMF
     if (path == 'api/dtmf') {
       String digit = request.url.queryParameters['digit'] ?? '';
+      int? seq = int.tryParse(request.url.queryParameters['seq'] ?? '');
       if (digit.isEmpty) {
         try {
           final bodyStr = await request.readAsString();
           if (bodyStr.isNotEmpty) {
             final json = jsonDecode(bodyStr) as Map<String, dynamic>;
             digit = json['digit']?.toString() ?? '';
+            seq = json['seq'] as int?;
           }
         } catch (_) {}
       }
       if (digit.isNotEmpty) {
-        telephonyController.sendDtmf(digit);
+        telephonyController.sendDtmf(digit, seq: seq);
       }
       return Response.ok('{"status":"ok","dtmf":"$digit"}', headers: {'content-type': 'application/json'});
+    }
+
+    // 5b. Cellular Call Audio Route (Speaker, Earpiece, Bluetooth)
+    if (path == 'api/audio/route') {
+      if (request.method == 'POST') {
+        String route = request.url.queryParameters['route'] ?? '';
+        if (route.isEmpty) {
+          try {
+            final bodyStr = await request.readAsString();
+            if (bodyStr.isNotEmpty) {
+              final json = jsonDecode(bodyStr) as Map<String, dynamic>;
+              route = json['route']?.toString() ?? '';
+            }
+          } catch (_) {}
+        }
+        final status = await telephonyController.setAudioRoute(route.isEmpty ? 'EARPIECE' : route);
+        broadcast(RelayMessage(type: 'AUDIO_ROUTE_STATUS', data: status));
+        return Response.ok(jsonEncode(status), headers: {'content-type': 'application/json'});
+      } else {
+        final status = await telephonyController.getAudioRoute();
+        return Response.ok(jsonEncode(status), headers: {'content-type': 'application/json'});
+      }
     }
 
     // 6. History

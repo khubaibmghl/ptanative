@@ -7,7 +7,10 @@ import '../services/relay_client.dart';
 import '../services/native_audio_service.dart';
 import '../theme/liquid_glass_theme.dart';
 import '../widgets/contact_avatar_widget.dart';
+import '../services/whatsapp_launcher.dart';
+import '../models/sms_thread_model.dart';
 import 'contact_detail_screen.dart';
+import 'sms_thread_screen.dart';
 
 class RecentsScreen extends StatefulWidget {
   const RecentsScreen({super.key});
@@ -20,7 +23,12 @@ class _RecentsScreenState extends State<RecentsScreen> {
   List<CallLogModel> _logs = [];
   Map<String, String> _contactIdByNumber = {};
   bool _isLoading = true;
+  int _selectedSegment = 0; // 0 = All, 1 = Missed
   StreamSubscription? _syncSub;
+
+  List<CallLogModel> get _displayedLogs => _selectedSegment == 0
+      ? _logs
+      : _logs.where((l) => l.callType == CallType.missed).toList();
 
   final List<Color> _avatarColors = const [
     Color(0xFF7A8DBE),
@@ -98,6 +106,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
   @override
   Widget build(BuildContext context) {
     final isDark = LiquidGlassTheme.isDarkMode;
+    final displayed = _displayedLogs;
 
     return Scaffold(
       backgroundColor: Colors.transparent,
@@ -106,47 +115,60 @@ class _RecentsScreenState extends State<RecentsScreen> {
         elevation: 0,
         centerTitle: true,
         leading: Padding(
-          padding: const EdgeInsets.only(left: 16, top: 10, bottom: 10),
-          child: Container(
-            decoration: BoxDecoration(
-              color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
-              borderRadius: BorderRadius.circular(16),
-            ),
-            alignment: Alignment.center,
-            child: const Text(
-              'Edit',
-              style: TextStyle(
-                color: LiquidGlassTheme.iosBlue,
-                fontSize: 14,
-                fontWeight: FontWeight.w600,
+          padding: const EdgeInsets.only(left: 14, top: 10, bottom: 10),
+          child: InkWell(
+            borderRadius: BorderRadius.circular(16),
+            onTap: () {
+              HapticFeedback.lightImpact();
+              // Edit / Clear history confirmation
+              _showClearHistorySheet(context);
+            },
+            child: Container(
+              decoration: BoxDecoration(
+                color: isDark ? Colors.white.withValues(alpha: 0.10) : const Color(0xFFEBEBF0),
+                borderRadius: BorderRadius.circular(16),
+                border: Border.all(
+                  color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.05),
+                  width: 0.5,
+                ),
+              ),
+              alignment: Alignment.center,
+              child: const Text(
+                'Edit',
+                style: TextStyle(
+                  color: LiquidGlassTheme.iosBlue,
+                  fontSize: 14,
+                  fontWeight: FontWeight.w600,
+                ),
               ),
             ),
           ),
         ),
-        title: Text(
-          'Calls',
-          style: TextStyle(
-            color: LiquidGlassTheme.textPrimary,
-            fontSize: 18,
-            fontWeight: FontWeight.bold,
-          ),
-        ),
+        title: _buildSegmentedControl(isDark),
         actions: [
           Padding(
-            padding: const EdgeInsets.only(right: 16),
+            padding: const EdgeInsets.only(right: 14, top: 10, bottom: 10),
             child: InkWell(
               borderRadius: BorderRadius.circular(16),
-              onTap: () => _showAllRecordingsSheet(context),
+              onTap: () {
+                HapticFeedback.lightImpact();
+                _showAllRecordingsSheet(context);
+              },
               child: Container(
-                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+                padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 4),
                 decoration: BoxDecoration(
-                  color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFEFEFF4),
+                  color: isDark ? Colors.white.withValues(alpha: 0.10) : const Color(0xFFEBEBF0),
                   borderRadius: BorderRadius.circular(16),
+                  border: Border.all(
+                    color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.05),
+                    width: 0.5,
+                  ),
                 ),
+                alignment: Alignment.center,
                 child: const Row(
                   mainAxisSize: MainAxisSize.min,
                   children: [
-                    Icon(Icons.mic_rounded, color: LiquidGlassTheme.iosBlue, size: 16),
+                    Icon(Icons.mic_rounded, color: LiquidGlassTheme.iosBlue, size: 15),
                     SizedBox(width: 4),
                     Text(
                       'Recordings',
@@ -170,27 +192,189 @@ class _RecentsScreenState extends State<RecentsScreen> {
         },
         child: _isLoading
             ? const Center(child: CircularProgressIndicator())
-            : _logs.isEmpty
-                ? const Center(
-                    child: Text(
-                      'No recent calls',
-                      style: TextStyle(color: LiquidGlassTheme.textSecondary),
+            : displayed.isEmpty
+                ? Center(
+                    child: Column(
+                      mainAxisSize: MainAxisSize.min,
+                      children: [
+                        Icon(
+                          _selectedSegment == 1
+                              ? Icons.phone_missed_rounded
+                              : Icons.phone_outlined,
+                          size: 48,
+                          color: _selectedSegment == 1
+                              ? const Color(0xFFFF3B30).withValues(alpha: 0.5)
+                              : LiquidGlassTheme.textSecondary.withValues(alpha: 0.5),
+                        ),
+                        const SizedBox(height: 12),
+                        Text(
+                          _selectedSegment == 1 ? 'No Missed Calls' : 'No Recent Calls',
+                          style: const TextStyle(
+                            color: LiquidGlassTheme.textSecondary,
+                            fontSize: 16,
+                            fontWeight: FontWeight.w500,
+                          ),
+                        ),
+                      ],
                     ),
                   )
                 : ListView.separated(
-                    padding: const EdgeInsets.only(top: 8, bottom: 100),
-                    itemCount: _logs.length,
+                    padding: const EdgeInsets.only(top: 8, bottom: 120),
+                    itemCount: displayed.length,
                     separatorBuilder: (context, index) => Divider(
-                      color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.08),
+                      color: isDark ? Colors.white12 : Colors.black.withValues(alpha: 0.07),
                       height: 1,
-                      indent: 68,
+                      indent: 74,
+                      endIndent: 16,
                     ),
                     itemBuilder: (context, index) {
-                      final item = _logs[index];
+                      final item = displayed[index];
                       return _buildCallLogItem(item);
                     },
                   ),
       ),
+    );
+  }
+
+  Widget _buildSegmentedControl(bool isDark) {
+    return Container(
+      width: 176,
+      height: 32,
+      padding: const EdgeInsets.all(2),
+      decoration: BoxDecoration(
+        color: isDark ? Colors.white.withValues(alpha: 0.12) : const Color(0xFFE2E2E8),
+        borderRadius: BorderRadius.circular(16),
+        border: Border.all(
+          color: isDark ? Colors.white.withValues(alpha: 0.14) : Colors.black.withValues(alpha: 0.05),
+          width: 0.5,
+        ),
+      ),
+      child: Stack(
+        children: [
+          AnimatedAlign(
+            duration: const Duration(milliseconds: 220),
+            curve: Curves.easeOutCubic,
+            alignment: _selectedSegment == 0 ? Alignment.centerLeft : Alignment.centerRight,
+            child: Container(
+              width: 84,
+              height: 28,
+              decoration: BoxDecoration(
+                color: isDark ? const Color(0xFF636366) : Colors.white,
+                borderRadius: BorderRadius.circular(14),
+                boxShadow: [
+                  BoxShadow(
+                    color: Colors.black.withValues(alpha: isDark ? 0.35 : 0.12),
+                    blurRadius: 4,
+                    offset: const Offset(0, 1.5),
+                  ),
+                ],
+              ),
+            ),
+          ),
+          Row(
+            children: [
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (_selectedSegment != 0) {
+                      HapticFeedback.selectionClick();
+                      setState(() => _selectedSegment = 0);
+                    }
+                  },
+                  child: Center(
+                    child: Text(
+                      'All',
+                      style: TextStyle(
+                        color: _selectedSegment == 0
+                            ? (isDark ? Colors.white : Colors.black)
+                            : (isDark ? Colors.white60 : Colors.black54),
+                        fontSize: 13,
+                        fontWeight: _selectedSegment == 0 ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+              Expanded(
+                child: GestureDetector(
+                  behavior: HitTestBehavior.opaque,
+                  onTap: () {
+                    if (_selectedSegment != 1) {
+                      HapticFeedback.selectionClick();
+                      setState(() => _selectedSegment = 1);
+                    }
+                  },
+                  child: Center(
+                    child: Text(
+                      'Missed',
+                      style: TextStyle(
+                        color: _selectedSegment == 1
+                            ? (isDark ? Colors.white : Colors.black)
+                            : (isDark ? Colors.white60 : Colors.black54),
+                        fontSize: 13,
+                        fontWeight: _selectedSegment == 1 ? FontWeight.w600 : FontWeight.w500,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+            ],
+          ),
+        ],
+      ),
+    );
+  }
+
+  void _showClearHistorySheet(BuildContext context) {
+    showModalBottomSheet(
+      context: context,
+      backgroundColor: Colors.transparent,
+      builder: (ctx) {
+        final isDark = LiquidGlassTheme.isDarkMode;
+        return Container(
+          padding: const EdgeInsets.only(left: 20, right: 20, top: 16, bottom: 36),
+          decoration: BoxDecoration(
+            color: isDark ? const Color(0xF21C1C24) : Colors.white,
+            borderRadius: const BorderRadius.vertical(top: Radius.circular(24)),
+          ),
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              Container(
+                width: 36,
+                height: 4,
+                decoration: BoxDecoration(
+                  color: isDark ? Colors.white24 : Colors.black26,
+                  borderRadius: BorderRadius.circular(2),
+                ),
+              ),
+              const SizedBox(height: 20),
+              ListTile(
+                leading: const Icon(Icons.delete_sweep_rounded, color: Color(0xFFFF3B30)),
+                title: const Text('Clear All Recents', style: TextStyle(color: Color(0xFFFF3B30), fontWeight: FontWeight.bold)),
+                subtitle: const Text('Remove local call history cache from iPhone'),
+                onTap: () async {
+                  Navigator.pop(ctx);
+                  await DatabaseHelper.instance.clearCallLogs();
+                  await _loadLogs();
+                  if (mounted) {
+                    ScaffoldMessenger.of(context).showSnackBar(
+                      const SnackBar(content: Text('Cleared local call history cache'), behavior: SnackBarBehavior.floating),
+                    );
+                  }
+                },
+              ),
+              const SizedBox(height: 8),
+              ListTile(
+                leading: const Icon(Icons.close_rounded),
+                title: const Text('Cancel', style: TextStyle(fontWeight: FontWeight.w600)),
+                onTap: () => Navigator.pop(ctx),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 
@@ -208,6 +392,30 @@ class _RecentsScreenState extends State<RecentsScreen> {
         HapticFeedback.lightImpact();
         _showCallDetailsSheet(context, log);
       },
+      onLongPress: () {
+        WhatsAppLauncher.showActionPicker(
+          context: context,
+          name: displayName,
+          number: log.remoteNumber,
+          label: log.serviceType.isNotEmpty ? log.serviceType : 'Zong GSM',
+          onZongGsmCall: () => RelayClient.instance.dialNumber(log.remoteNumber),
+          onZongSms: () {
+            final norm = PhoneNumberNormalizer.normalize(log.remoteNumber);
+            Navigator.of(context).push(
+              MaterialPageRoute(
+                builder: (_) => SmsThreadScreen(
+                  thread: SmsThreadModel(
+                    normalizedKey: norm,
+                    rawAddress: log.remoteNumber,
+                    displayName: displayName,
+                    messages: [],
+                  ),
+                ),
+              ),
+            );
+          },
+        );
+      },
       child: Padding(
         padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 10),
         child: Row(
@@ -216,15 +424,15 @@ class _RecentsScreenState extends State<RecentsScreen> {
             ContactAvatarWidget(
               contactId: contactId,
               displayName: displayName,
-              size: 44,
+              size: 46,
               fontSize: 16,
               backgroundColor: isMissed
-                  ? const Color(0xFFFF3B30).withValues(alpha: 0.18)
+                  ? const Color(0xFFFF3B30).withValues(alpha: 0.16)
                   : avatarBgColor,
               textColor: isMissed ? const Color(0xFFFF453A) : Colors.white,
               border: isMissed
                   ? Border.all(color: const Color(0xFFFF3B30).withValues(alpha: 0.35), width: 1)
-                  : null,
+                  : Border.all(color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.06), width: 0.5),
             ),
             const SizedBox(width: 14),
 
@@ -248,7 +456,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
                   Row(
                     children: [
                       Text(
-                        isMissed ? '↙ Missed' : '$arrow Zong GSM',
+                        isMissed ? '↙ Missed' : '$arrow ${log.serviceType.isNotEmpty ? log.serviceType : "Zong GSM"}',
                         style: TextStyle(
                           color: isMissed ? const Color(0xFFFF453A) : LiquidGlassTheme.textSecondary,
                           fontSize: 13,
@@ -278,7 +486,7 @@ class _RecentsScreenState extends State<RecentsScreen> {
                                 ),
                                 const SizedBox(width: 3),
                                 Text(
-                                  '${log.durationSeconds}s',
+                                  '${log.durationSeconds}s ring',
                                   style: const TextStyle(
                                     color: Color(0xFFFF453A),
                                     fontSize: 11,
@@ -295,6 +503,10 @@ class _RecentsScreenState extends State<RecentsScreen> {
                             decoration: BoxDecoration(
                               color: const Color(0xFFFF3B30).withValues(alpha: 0.08),
                               borderRadius: BorderRadius.circular(5),
+                              border: Border.all(
+                                color: const Color(0xFFFF3B30).withValues(alpha: 0.18),
+                                width: 0.5,
+                              ),
                             ),
                             child: const Text(
                               'Missed',
@@ -310,15 +522,26 @@ class _RecentsScreenState extends State<RecentsScreen> {
                           padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 1.5),
                           decoration: BoxDecoration(
                             color: isDark ? Colors.white.withValues(alpha: 0.08) : Colors.black.withValues(alpha: 0.05),
-                            borderRadius: BorderRadius.circular(5),
-                          ),
-                          child: Text(
-                            log.durationFormatted,
-                            style: const TextStyle(
-                              color: LiquidGlassTheme.textSecondary,
-                              fontSize: 11,
-                              fontWeight: FontWeight.w500,
+                            borderRadius: BorderRadius.circular(6),
+                            border: Border.all(
+                              color: isDark ? Colors.white.withValues(alpha: 0.12) : Colors.black.withValues(alpha: 0.06),
+                              width: 0.5,
                             ),
+                          ),
+                          child: Row(
+                            mainAxisSize: MainAxisSize.min,
+                            children: [
+                              Icon(Icons.timer_outlined, size: 10, color: LiquidGlassTheme.textSecondary.withValues(alpha: 0.8)),
+                              const SizedBox(width: 3),
+                              Text(
+                                log.durationFormatted,
+                                style: const TextStyle(
+                                  color: LiquidGlassTheme.textSecondary,
+                                  fontSize: 11,
+                                  fontWeight: FontWeight.w600,
+                                ),
+                              ),
+                            ],
                           ),
                         ),
                       ],
@@ -338,18 +561,87 @@ class _RecentsScreenState extends State<RecentsScreen> {
             ),
             const SizedBox(width: 8),
 
-            // Native iOS Call Action Button at the most right side
+            // 1-Tap Direct WhatsApp Chat Action Lens
+            GestureDetector(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                WhatsAppLauncher.startChat(log.remoteNumber);
+              },
+              behavior: HitTestBehavior.opaque,
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: LiquidGlassTheme.whatsappGreen.withValues(alpha: isDark ? 0.22 : 0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: LiquidGlassTheme.whatsappGreen.withValues(alpha: isDark ? 0.45 : 0.3),
+                    width: 0.75,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: LiquidGlassTheme.whatsappGreen.withValues(alpha: 0.12),
+                      blurRadius: 6,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
+                  Icons.chat_bubble_rounded,
+                  color: LiquidGlassTheme.whatsappGreen,
+                  size: 15,
+                ),
+              ),
+            ),
+            const SizedBox(width: 6),
+
+            // Tactile Emerald Liquid Glass Call Action Button
             GestureDetector(
               onTap: () {
                 HapticFeedback.mediumImpact();
                 RelayClient.instance.dialNumber(log.remoteNumber);
               },
               behavior: HitTestBehavior.opaque,
-              child: const Padding(
-                padding: EdgeInsets.all(6),
-                child: Icon(
+              child: Container(
+                width: 32,
+                height: 32,
+                decoration: BoxDecoration(
+                  color: LiquidGlassTheme.gsmGreen.withValues(alpha: isDark ? 0.22 : 0.15),
+                  shape: BoxShape.circle,
+                  border: Border.all(
+                    color: LiquidGlassTheme.gsmGreen.withValues(alpha: isDark ? 0.45 : 0.3),
+                    width: 0.75,
+                  ),
+                  boxShadow: [
+                    BoxShadow(
+                      color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.12),
+                      blurRadius: 6,
+                      offset: const Offset(0, 1),
+                    ),
+                  ],
+                ),
+                alignment: Alignment.center,
+                child: const Icon(
                   Icons.phone_rounded,
                   color: LiquidGlassTheme.gsmGreen,
+                  size: 15,
+                ),
+              ),
+            ),
+
+            // Apple (i) Info Button to open detailed recording sheet
+            GestureDetector(
+              onTap: () {
+                HapticFeedback.lightImpact();
+                _showCallDetailsSheet(context, log);
+              },
+              behavior: HitTestBehavior.opaque,
+              child: Padding(
+                padding: const EdgeInsets.only(left: 4, right: 2, top: 6, bottom: 6),
+                child: Icon(
+                  Icons.info_outline_rounded,
+                  color: LiquidGlassTheme.iosBlue.withValues(alpha: isDark ? 0.85 : 0.75),
                   size: 20,
                 ),
               ),
@@ -640,10 +932,11 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
             ),
             const SizedBox(height: 16),
 
-            // Action Buttons (Call Back & Copy Number)
+            // Action Buttons: Call Back, Chat on WhatsApp, Copy Number
             Row(
               children: [
                 Expanded(
+                  flex: 3,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
                       backgroundColor: LiquidGlassTheme.gsmGreen,
@@ -651,25 +944,41 @@ class _CallDetailsSheetState extends State<CallDetailsSheet> {
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    icon: const Icon(Icons.call, size: 18),
-                    label: const Text('Call Back', style: TextStyle(fontWeight: FontWeight.bold)),
+                    icon: const Icon(Icons.call, size: 16),
+                    label: const Text('Call Back', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
                     onPressed: () {
                       Navigator.pop(context);
                       RelayClient.instance.dialNumber(widget.log.remoteNumber);
                     },
                   ),
                 ),
-                const SizedBox(width: 12),
+                const SizedBox(width: 8),
                 Expanded(
+                  flex: 3,
                   child: ElevatedButton.icon(
                     style: ElevatedButton.styleFrom(
-                      backgroundColor: Colors.white.withValues(alpha: 0.12),
+                      backgroundColor: LiquidGlassTheme.whatsappGreen,
                       foregroundColor: Colors.white,
                       padding: const EdgeInsets.symmetric(vertical: 12),
                       shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(12)),
                     ),
-                    icon: const Icon(Icons.copy_rounded, size: 18),
-                    label: const Text('Copy Number'),
+                    icon: const Icon(Icons.chat_bubble_rounded, size: 16),
+                    label: const Text('WhatsApp', style: TextStyle(fontWeight: FontWeight.bold, fontSize: 13)),
+                    onPressed: () {
+                      Navigator.pop(context);
+                      WhatsAppLauncher.startChat(widget.log.remoteNumber);
+                    },
+                  ),
+                ),
+                const SizedBox(width: 8),
+                Container(
+                  decoration: BoxDecoration(
+                    color: Colors.white.withValues(alpha: 0.12),
+                    borderRadius: BorderRadius.circular(12),
+                  ),
+                  child: IconButton(
+                    icon: const Icon(Icons.copy_rounded, color: Colors.white, size: 18),
+                    tooltip: 'Copy Number',
                     onPressed: () {
                       Clipboard.setData(ClipboardData(text: widget.log.remoteNumber));
                       HapticFeedback.lightImpact();

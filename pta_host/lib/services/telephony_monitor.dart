@@ -38,6 +38,12 @@ class TelephonyMonitor {
           return;
         }
 
+        if (event['type'] == 'AUDIO_ROUTE') {
+          final map = Map<String, dynamic>.from(event);
+          server.broadcast(RelayMessage(type: 'AUDIO_ROUTE_STATUS', data: map));
+          return;
+        }
+
         final state = event['state']?.toString() ?? 'IDLE';
         final num = event['incomingNumber']?.toString() ?? '';
         final eventTs = event['timestamp'] as int?;

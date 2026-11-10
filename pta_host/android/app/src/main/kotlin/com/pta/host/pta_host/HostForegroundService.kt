@@ -3,6 +3,7 @@ package com.pta.host.pta_host
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.PendingIntent
 import android.app.Service
 import android.content.Context
 import android.content.Intent
@@ -85,10 +86,21 @@ class HostForegroundService : Service() {
     }
 
     private fun createNotification(): Notification {
+        val launchIntent = packageManager.getLaunchIntentForPackage(packageName) ?: Intent(this, MainActivity::class.java).apply {
+            flags = Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP
+        }
+        val pendingIntentFlags = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.M) {
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
+        } else {
+            PendingIntent.FLAG_UPDATE_CURRENT
+        }
+        val contentPendingIntent = PendingIntent.getActivity(this, 0, launchIntent, pendingIntentFlags)
+
         return NotificationCompat.Builder(this, "pta_host_channel")
-            .setContentTitle(" PTA Host Relay Active")
-            .setContentText("GSM call & SMS relay is active. Listening for iPhone...")
+            .setContentTitle("PTA Host Relay Active")
+            .setContentText("GSM call & SMS relay is active. Tap to open host app.")
             .setSmallIcon(android.R.drawable.ic_menu_call)
+            .setContentIntent(contentPendingIntent)
             .setOngoing(true)
             .setPriority(NotificationCompat.PRIORITY_LOW)
             .build()

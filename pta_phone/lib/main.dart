@@ -307,6 +307,20 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
         if (raw.isNotEmpty) {
           RelayClient.instance.handleNativeUdpFrame(raw);
         }
+      } else if (call.method == 'onNativeHeartbeatPulse') {
+        RelayClient.instance.handleNativeHeartbeatPulse();
+      } else if (call.method == 'onNotificationAnswerCall') {
+        debugPrint('[NATIVE_BRIDGE] 🟢 User answered from notification banner');
+        RelayClient.instance.answerCall();
+      } else if (call.method == 'onNotificationDeclineCall') {
+        debugPrint('[NATIVE_BRIDGE] 🔴 User declined from notification banner');
+        RelayClient.instance.hangupCall();
+      } else if (call.method == 'onNotificationOpenSms') {
+        if (mounted) {
+          setState(() {
+            _currentIndex = 3; // Navigate to SMS / OTP tab
+          });
+        }
       } else if (call.method == 'onNativeLog') {
         final tag = call.arguments?['tag']?.toString() ?? 'iOS-NATIVE';
         final msg = call.arguments?['message']?.toString() ?? '';
@@ -413,64 +427,37 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
 
   @override
   Widget build(BuildContext context) {
-    final isDark = LiquidGlassTheme.isDarkMode;
-
     return Scaffold(
       backgroundColor: LiquidGlassTheme.bg,
-      body: Stack(
-        children: [
-          // Background subtle ambient radial glow
-          if (isDark) ...[
-            Positioned(
-              top: -120,
-              right: -80,
-              child: Container(
-                width: 320,
-                height: 320,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: LiquidGlassTheme.iosBlue.withValues(alpha: 0.12),
-                ),
-              ),
-            ),
-            Positioned(
-              bottom: 60,
-              left: -80,
-              child: Container(
-                width: 300,
-                height: 300,
-                decoration: BoxDecoration(
-                  shape: BoxShape.circle,
-                  color: LiquidGlassTheme.gsmGreen.withValues(alpha: 0.08),
-                ),
-              ),
-            ),
-          ],
-
-          SafeArea(
-            top: false,
-            bottom: false,
-            child: Column(
-              children: [
-                _buildMinimalHeaderDot(),
-                Expanded(
-                  child: IndexedStack(
-                    index: _currentIndex,
-                    children: _screens,
+      body: LiquidGlassBackground(
+        child: Stack(
+          children: [
+            SafeArea(
+              top: false,
+              bottom: false,
+              child: Column(
+                children: [
+                  _buildMinimalHeaderDot(),
+                  Expanded(
+                    child: IndexedStack(
+                      index: _currentIndex,
+                      children: _screens,
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
-          ),
 
-          // Floating iOS Glass Dock Bar (Centered) - hidden while keyboard is active
-          if (MediaQuery.of(context).viewInsets.bottom == 0)
-            Positioned(
-              left: 20,
-              right: 20,
-              bottom: 24,
-              child: _buildLiquidGlassDock(),
-            ),
+            // Floating iOS Glass Dock Bar (Centered) - hidden while keyboard is active
+            if (MediaQuery.of(context).viewInsets.bottom == 0)
+              Positioned(
+                left: 18,
+                right: 18,
+                bottom: MediaQuery.paddingOf(context).bottom > 0
+                    ? MediaQuery.paddingOf(context).bottom + 8
+                    : 22,
+                child: _buildLiquidGlassDock(),
+              ),
 
 
           // In-Call Overlay: Full-Screen iOS 17/18 InCallScreen OR Minimized Dynamic Island Pill
@@ -889,61 +876,107 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     final isDark = LiquidGlassTheme.isDarkMode;
 
     return ClipRRect(
-      borderRadius: BorderRadius.circular(32),
+      borderRadius: BorderRadius.circular(34),
       child: BackdropFilter(
         filter: ImageFilter.blur(
-          sigmaX: LiquidGlassTheme.glassBlurSigma,
-          sigmaY: LiquidGlassTheme.glassBlurSigma,
+          sigmaX: 30.0,
+          sigmaY: 30.0,
         ),
-        child: Container(
-          height: 64,
-          padding: const EdgeInsets.symmetric(horizontal: 4),
-          decoration: BoxDecoration(
-            color: isDark ? const Color(0x351C1C26) : const Color(0xEBFAFBFE),
-            borderRadius: BorderRadius.circular(32),
-            border: Border.all(
-              color: isDark ? const Color(0x35FFFFFF) : const Color(0x1F000000),
-              width: 0.5,
+        child: CustomPaint(
+          foregroundPainter: GlassBorderPainter(
+            radius: 34,
+            strokeWidth: 1.0,
+            gradient: LinearGradient(
+              begin: Alignment.topCenter,
+              end: Alignment.bottomCenter,
+              colors: isDark
+                  ? [
+                      const Color(0x75FFFFFF),
+                      const Color(0x30FFFFFF),
+                      const Color(0x10FFFFFF),
+                    ]
+                  : [
+                      const Color(0xBAFFFFFF),
+                      const Color(0x60FFFFFF),
+                      const Color(0x20000000),
+                    ],
+              stops: const [0.0, 0.45, 1.0],
             ),
-            boxShadow: isDark
-                ? null
-                : [
-                    BoxShadow(
-                      color: Colors.black.withValues(alpha: 0.08),
-                      blurRadius: 16,
-                      offset: const Offset(0, 6),
-                    ),
-                  ],
           ),
-          child: Row(
-            mainAxisAlignment: MainAxisAlignment.spaceEvenly,
-            children: [
-              _buildDockItem(
-                icon: Icons.access_time_filled,
-                label: 'Calls',
-                index: 0,
+          child: Container(
+            height: 68,
+            padding: const EdgeInsets.symmetric(horizontal: 6, vertical: 4),
+            decoration: BoxDecoration(
+              gradient: LinearGradient(
+                begin: Alignment.topCenter,
+                end: Alignment.bottomCenter,
+                colors: isDark
+                    ? [
+                        const Color(0x40252538),
+                        const Color(0x22151422),
+                      ]
+                    : [
+                        const Color(0x90FFFFFF),
+                        const Color(0x60EFF1F9),
+                      ],
               ),
-              _buildDockItem(
-                icon: Icons.person,
-                label: 'Contacts',
-                index: 1,
-              ),
-              _buildDockItem(
-                icon: Icons.grid_view_rounded,
-                label: 'Keypad',
-                index: 2,
-              ),
-              _buildDockItem(
-                icon: Icons.shield_outlined,
-                label: 'SMS / OTP',
-                index: 3,
-              ),
-              _buildDockItem(
-                icon: Icons.settings,
-                label: 'Settings',
-                index: 4,
-              ),
-            ],
+              borderRadius: BorderRadius.circular(34),
+              boxShadow: isDark
+                  ? [
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.50),
+                        blurRadius: 28,
+                        offset: const Offset(0, 10),
+                      ),
+                      BoxShadow(
+                        color: Colors.black.withValues(alpha: 0.30),
+                        blurRadius: 8,
+                        offset: const Offset(0, 2),
+                      ),
+                    ]
+                  : [
+                      BoxShadow(
+                        color: const Color(0xFF1B2340).withValues(alpha: 0.08),
+                        blurRadius: 24,
+                        offset: const Offset(0, 8),
+                      ),
+                      BoxShadow(
+                        color: Colors.white.withValues(alpha: 0.60),
+                        blurRadius: 2,
+                        offset: const Offset(0, -1),
+                      ),
+                    ],
+            ),
+            child: Row(
+              mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+              children: [
+                _buildDockItem(
+                  icon: Icons.access_time_filled,
+                  label: 'Calls',
+                  index: 0,
+                ),
+                _buildDockItem(
+                  icon: Icons.person,
+                  label: 'Contacts',
+                  index: 1,
+                ),
+                _buildDockItem(
+                  icon: Icons.grid_view_rounded,
+                  label: 'Keypad',
+                  index: 2,
+                ),
+                _buildDockItem(
+                  icon: Icons.shield_outlined,
+                  label: 'SMS / OTP',
+                  index: 3,
+                ),
+                _buildDockItem(
+                  icon: Icons.settings,
+                  label: 'Settings',
+                  index: 4,
+                ),
+              ],
+            ),
           ),
         ),
       ),
@@ -960,7 +993,7 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
     final isDark = LiquidGlassTheme.isDarkMode;
 
     final activeColor = LiquidGlassTheme.iosBlue;
-    final inactiveColor = isDark ? const Color(0xFF8E8E93) : const Color(0xFF8E8E93);
+    final inactiveColor = isDark ? const Color(0xFF9696A0) : const Color(0xFF86868D);
 
     return GestureDetector(
       onTap: () {
@@ -971,12 +1004,41 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
       },
       behavior: HitTestBehavior.opaque,
       child: AnimatedContainer(
-        duration: const Duration(milliseconds: 200),
-        curve: Curves.easeInOut,
-        padding: const EdgeInsets.symmetric(horizontal: 10, vertical: 6),
+        duration: const Duration(milliseconds: 220),
+        curve: Curves.easeOutCubic,
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 6),
         decoration: BoxDecoration(
-          color: isSelected ? (isDark ? const Color(0x28007AFF) : const Color(0xFFE5E5EA)) : Colors.transparent,
-          borderRadius: BorderRadius.circular(22),
+          gradient: isSelected
+              ? LinearGradient(
+                  begin: Alignment.topCenter,
+                  end: Alignment.bottomCenter,
+                  colors: isDark
+                      ? [
+                          const Color(0x45007AFF),
+                          const Color(0x20007AFF),
+                        ]
+                      : [
+                          const Color(0x32007AFF),
+                          const Color(0x15007AFF),
+                        ],
+                )
+              : null,
+          borderRadius: BorderRadius.circular(24),
+          border: isSelected
+              ? Border.all(
+                  color: LiquidGlassTheme.iosBlue.withValues(alpha: isDark ? 0.50 : 0.35),
+                  width: 0.8,
+                )
+              : null,
+          boxShadow: isSelected
+              ? [
+                  BoxShadow(
+                    color: LiquidGlassTheme.iosBlue.withValues(alpha: isDark ? 0.30 : 0.15),
+                    blurRadius: 10,
+                    offset: const Offset(0, 2),
+                  ),
+                ]
+              : null,
         ),
         child: Column(
           mainAxisAlignment: MainAxisAlignment.center,
@@ -1011,13 +1073,14 @@ class _MainNavigationScreenState extends State<MainNavigationScreen> with Widget
                   ),
               ],
             ),
-            const SizedBox(height: 2),
+            const SizedBox(height: 3),
             Text(
               label,
               style: TextStyle(
                 color: isSelected ? activeColor : inactiveColor,
-                fontSize: 11,
-                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w400,
+                fontSize: 10.5,
+                fontWeight: isSelected ? FontWeight.w600 : FontWeight.w500,
+                letterSpacing: -0.2,
               ),
             ),
           ],

@@ -4,6 +4,7 @@ import 'package:pta_shared/pta_shared.dart';
 import '../data/database_helper.dart';
 import '../models/sms_thread_model.dart';
 import '../services/relay_client.dart';
+import '../services/whatsapp_launcher.dart';
 import '../theme/liquid_glass_theme.dart';
 import 'call_history_screen.dart';
 import 'sms_thread_screen.dart';
@@ -168,6 +169,14 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
           ),
         ),
       );
+    }
+  }
+
+  void _openWhatsAppChat() {
+    HapticFeedback.lightImpact();
+    final primary = _phoneNumbers.isNotEmpty ? _phoneNumbers.first.rawNumber : widget.initialLog?.remoteNumber ?? '';
+    if (primary.isNotEmpty) {
+      WhatsAppLauncher.startChat(primary);
     }
   }
 
@@ -416,7 +425,7 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
                   ),
                   const SizedBox(height: 18),
 
-                  // 4 Circular Glass Action Buttons: Message, Call, Video, Mail
+                  // 4 Circular Glass Action Buttons: Message, Call, WhatsApp, History
                   Row(
                     mainAxisAlignment: MainAxisAlignment.center,
                     children: [
@@ -424,9 +433,15 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
                       const SizedBox(width: 16),
                       _buildActionButton(Icons.phone_rounded, isDark, _callPrimaryNumber),
                       const SizedBox(width: 16),
-                      _buildActionButton(Icons.videocam_rounded, isDark, _startVideoCall),
+                      _buildActionButton(
+                        Icons.chat_rounded,
+                        isDark,
+                        _openWhatsAppChat,
+                        iconColor: LiquidGlassTheme.whatsappGreen,
+                        bgColor: LiquidGlassTheme.whatsappGreen.withValues(alpha: isDark ? 0.22 : 0.15),
+                      ),
                       const SizedBox(width: 16),
-                      _buildActionButton(Icons.email_rounded, isDark, _sendEmail),
+                      _buildActionButton(Icons.history_rounded, isDark, _openCallHistoryScreen),
                     ],
                   ),
                   const SizedBox(height: 22),
@@ -593,18 +608,36 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
                                           ),
                                         ],
                                       ),
-                                      IconButton(
-                                        icon: Icon(
-                                          Icons.phone_rounded,
-                                          color: isDark ? Colors.white70 : Colors.black54,
-                                          size: 20,
-                                        ),
-                                        onPressed: () {
-                                          HapticFeedback.lightImpact();
-                                          final num = phone.rawNumber;
-                                          Navigator.of(context).popUntil((route) => route.isFirst);
-                                          RelayClient.instance.dialNumber(num);
-                                        },
+                                      Row(
+                                        mainAxisSize: MainAxisSize.min,
+                                        children: [
+                                          IconButton(
+                                            icon: const Icon(
+                                              Icons.chat_bubble_rounded,
+                                              color: LiquidGlassTheme.whatsappGreen,
+                                              size: 19,
+                                            ),
+                                            tooltip: 'WhatsApp Chat',
+                                            onPressed: () {
+                                              HapticFeedback.lightImpact();
+                                              WhatsAppLauncher.startChat(phone.rawNumber);
+                                            },
+                                          ),
+                                          IconButton(
+                                            icon: Icon(
+                                              Icons.phone_rounded,
+                                              color: isDark ? Colors.white70 : Colors.black54,
+                                              size: 20,
+                                            ),
+                                            tooltip: 'Cellular Call',
+                                            onPressed: () {
+                                              HapticFeedback.lightImpact();
+                                              final num = phone.rawNumber;
+                                              Navigator.of(context).popUntil((route) => route.isFirst);
+                                              RelayClient.instance.dialNumber(num);
+                                            },
+                                          ),
+                                        ],
                                       ),
                                     ],
                                   ),
@@ -699,7 +732,13 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
     );
   }
 
-  Widget _buildActionButton(IconData icon, bool isDark, VoidCallback onTap) {
+  Widget _buildActionButton(
+    IconData icon,
+    bool isDark,
+    VoidCallback onTap, {
+    Color? iconColor,
+    Color? bgColor,
+  }) {
     return GestureDetector(
       onTap: () {
         HapticFeedback.lightImpact();
@@ -709,16 +748,18 @@ class _ContactDetailScreenState extends State<ContactDetailScreen> {
         width: 52,
         height: 52,
         decoration: BoxDecoration(
-          color: isDark ? const Color(0x356A6498) : const Color(0xFFD6D1EA),
+          color: bgColor ?? (isDark ? const Color(0x356A6498) : const Color(0xFFD6D1EA)),
           shape: BoxShape.circle,
           border: Border.all(
-            color: isDark ? Colors.white.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.5),
+            color: iconColor != null
+                ? iconColor.withValues(alpha: 0.4)
+                : (isDark ? Colors.white.withValues(alpha: 0.18) : Colors.white.withValues(alpha: 0.5)),
             width: 0.8,
           ),
         ),
         child: Icon(
           icon,
-          color: isDark ? Colors.white : const Color(0xFF332E50),
+          color: iconColor ?? (isDark ? Colors.white : const Color(0xFF332E50)),
           size: 22,
         ),
       ),

@@ -53,6 +53,33 @@ class ActiveCallInfo {
   }
 }
 
+/// Host Audio Route Status (Speaker, Earpiece, Bluetooth)
+class HostAudioRouteState {
+  final String currentRoute; // 'EARPIECE' | 'SPEAKER' | 'BLUETOOTH'
+  final bool bluetoothConnected;
+  final String bluetoothName;
+  final List<String> availableRoutes;
+
+  const HostAudioRouteState({
+    this.currentRoute = 'EARPIECE',
+    this.bluetoothConnected = false,
+    this.bluetoothName = '',
+    this.availableRoutes = const ['EARPIECE', 'SPEAKER'],
+  });
+
+  factory HostAudioRouteState.fromMap(Map<String, dynamic> map) {
+    return HostAudioRouteState(
+      currentRoute: map['currentRoute']?.toString() ?? 'EARPIECE',
+      bluetoothConnected: map['bluetoothConnected'] as bool? ?? false,
+      bluetoothName: map['bluetoothName']?.toString() ?? '',
+      availableRoutes: (map['availableRoutes'] as List<dynamic>?)
+              ?.map((e) => e.toString())
+              .toList() ??
+          const ['EARPIECE', 'SPEAKER'],
+    );
+  }
+}
+
 /// WebSocket Client & REST Bridge connecting to Vivo S1 Host Engine
 class RelayClient {
   static final RelayClient instance = RelayClient._init();
@@ -67,6 +94,7 @@ class RelayClient {
   Timer? _pingTimer;
   int _lastPongTime = 0;
   bool _isConnected = false;
+  bool _isConnecting = false;
   int _connectionEstablishedTime = 0;
   int _sessionMessageCount = 0;
 
@@ -79,6 +107,7 @@ class RelayClient {
   final _smsController = StreamController<SmsMessageModel>.broadcast();
   final _syncController = StreamController<void>.broadcast();
   final _missedCallController = StreamController<CallLogModel>.broadcast();
+  final _audioRouteController = StreamController<HostAudioRouteState>.broadcast();
 
   Stream<bool> get connectionStream => _connectionController.stream;
   Stream<DeviceStatusModel> get statusStream => _statusController.stream;
@@ -86,9 +115,11 @@ class RelayClient {
   Stream<SmsMessageModel> get smsStream => _smsController.stream;
   Stream<void> get syncStream => _syncController.stream;
   Stream<CallLogModel> get missedCallStream => _missedCallController.stream;
+  Stream<HostAudioRouteState> get audioRouteStream => _audioRouteController.stream;
 
   ActiveCallInfo? currentActiveCall;
   DeviceStatusModel? lastStatus;
+  HostAudioRouteState currentAudioRoute = const HostAudioRouteState();
   bool isAnsweringOrActive = false;
   int _lastHangupTimestamp = 0;
   final List<String> diagnosticLogs = [];
@@ -448,8 +479,17 @@ class RelayClient {
   }
 
   void connect() {
-    if (_isConnected) return;
+    if (_isConnected || _isConnecting) return;
     isConnectedViaCloud = false;
+    _isConnecting = true;
+
+    // Gracefully close any dangling socket before creating a new one
+    try {
+      _wsSubscription?.cancel();
+      _wsSubscription = null;
+      _channel?.sink.close();
+      _channel = null;
+    } catch (_) {}
 
     try {
       final wsUrl = Uri.parse('ws://$hostIp:$hostPort/ws');
@@ -460,6 +500,7 @@ class RelayClient {
       _wsSubscription = _channel!.stream.listen(
         _onMessageReceived,
         onDone: () {
+          _isConnecting = false;
           final code = _channel?.closeCode;
           final reason = _channel?.closeReason;
           final now = DateTime.now().millisecondsSinceEpoch;
@@ -469,6 +510,7 @@ class RelayClient {
           _onDisconnected();
         },
         onError: (err) {
+          _isConnecting = false;
           final code = _channel?.closeCode;
           final reason = _channel?.closeReason;
           final now = DateTime.now().millisecondsSinceEpoch;
@@ -486,6 +528,7 @@ class RelayClient {
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
       _startPingHeartbeat();
     } catch (e) {
+      _isConnecting = false;
       logDiagnostic('❌ [CONNECT-EXCEPTION] Exception connecting to $hostIp:$hostPort: $e');
       if (_shouldUseCloudFallback()) {
         _connectCloudFallback();
@@ -532,6 +575,7 @@ class RelayClient {
 
   void disconnect() {
     logDiagnostic('Disconnect requested explicitly');
+    _isConnecting = false;
     _pingTimer?.cancel();
     _pingTimer = null;
     _reconnectTimer?.cancel();
@@ -553,6 +597,7 @@ class RelayClient {
     _pingTimer?.cancel();
     _pingTimer = null;
     _isConnected = false;
+    _isConnecting = false;
     isConnectedViaCloud = false;
     _connectionController.add(false);
     logDiagnostic('⚡ Starting superfast background reconnection loop...');
@@ -567,15 +612,53 @@ class RelayClient {
     _onMessageReceived(raw);
   }
 
+  int _wakeGracePeriodUntil = 0;
+  int _lastSleepFreezeProbeSentAt = 0;
+
+  /// Dispatched when native Swift keep-alive pulses (via audio chunk completion or background timer)
+  void handleNativeHeartbeatPulse() {
+    final now = DateTime.now().millisecondsSinceEpoch;
+    _lastPongTime = now;
+    _wakeGracePeriodUntil = 0;
+    if (_isConnected && _channel != null && isAppPaused) {
+      try {
+        _lastPingSentTimestamp = now;
+        _channel!.sink.add(RelayMessage.ping().toJsonString());
+      } catch (_) {}
+    }
+  }
+
   void _startPingHeartbeat() {
     _pingTimer?.cancel();
     _pingTimer = Timer.periodic(const Duration(seconds: 10), (_) {
       if (_isConnected && _channel != null) {
         final now = DateTime.now().millisecondsSinceEpoch;
         final elapsedSincePong = now - _lastPongTime;
-        // Watchdog: 35s timeout ensures broken Wi-Fi sockets are detected and reconnected quickly
+
+        // In post-wake grace period, allow the host time to answer without killing the socket
+        if (now < _wakeGracePeriodUntil) {
+          return;
+        }
+
+        // Watchdog: 40s timeout in background, 35s in foreground
         final maxWatchdogTimeout = isAppPaused ? 40000 : 35000;
         if (elapsedSincePong > maxWatchdogTimeout) {
+          // If elapsed time is huge (>45s), Dart was frozen during iOS screen lock!
+          // Give an urgent 6-second grace probe to test if the existing socket is still healthy.
+          if (elapsedSincePong > 45000 && (now - _lastSleepFreezeProbeSentAt > 10000)) {
+            _lastSleepFreezeProbeSentAt = now;
+            _wakeGracePeriodUntil = now + 6000;
+            logDiagnostic('⚡ [WATCHDOG-PROBE] Detected post-sleep timer wake (${elapsedSincePong}ms elapsed). Sending urgent probe PING before concluding disconnect...');
+            try {
+              _lastPingSentTimestamp = now;
+              _channel?.sink.add(RelayMessage.ping().toJsonString());
+            } catch (_) {
+              disconnect();
+              connect();
+            }
+            return;
+          }
+
           logDiagnostic('⚠️ [WATCHDOG-TIMEOUT] No response from host for ${elapsedSincePong}ms (Limit: ${maxWatchdogTimeout}ms). Disconnecting socket to force immediate reconnect.');
           disconnect();
           connect();
@@ -619,12 +702,24 @@ class RelayClient {
     } catch (_) {}
   }
 
+  void dismissNativeIncomingCallNotification() {
+    try {
+      const MethodChannel('com.pta.phone/native_intents').invokeMethod('dismissIncomingCallNotification');
+    } catch (_) {}
+  }
+
   void onAppResumed() {
     isAppPaused = false;
     final now = DateTime.now().millisecondsSinceEpoch;
     final dur = _connectionEstablishedTime > 0 ? ((now - _connectionEstablishedTime) ~/ 1000) : -1;
-    logDiagnostic('☀️ [APP-RESUMED] App resumed from background/screen lock. Connected: $_isConnected, ChannelActive: ${_channel != null}, SessionAge: ${dur}s, IdleSinceLastPong: ${now - _lastPongTime}ms');
-    _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+    final idleMs = now - _lastPongTime;
+
+    // Reset idle timer and set a 6-second post-wake grace window so sleep duration doesn't kill socket
+    _wakeGracePeriodUntil = now + 6000;
+    _lastPongTime = now;
+    _lastSleepFreezeProbeSentAt = 0;
+
+    logDiagnostic('☀️ [APP-RESUMED] App resumed from background/screen lock. Connected: $_isConnected, ChannelActive: ${_channel != null}, SessionAge: ${dur}s, IdleSinceLastPong: ${idleMs}ms');
     _pingNativeKeepAlive();
     if (!_isConnected || _channel == null) {
       logDiagnostic('⚡ [INSTANT-WAKE] Background connection was dropped! Reconnecting directly to host $hostIp...');
@@ -640,6 +735,7 @@ class RelayClient {
       });
     } else {
       try {
+        _lastPingSentTimestamp = now;
         _channel!.sink.add(RelayMessage.ping().toJsonString());
       } catch (_) {
         _onDisconnected();
@@ -667,7 +763,7 @@ class RelayClient {
         _reconnectTimer = null;
         return;
       }
-      if (hostIp.isNotEmpty) {
+      if (hostIp.isNotEmpty && !_isConnecting) {
         connect();
         if (_isConnected) {
           timer.cancel();
@@ -676,7 +772,7 @@ class RelayClient {
         }
       }
       // Only perform heavy network subnet sweeps when app is in foreground
-      if (!isAppPaused) {
+      if (!isAppPaused && !_isConnecting) {
         logDiagnostic('⚡ Background search running for Vivo S1...');
         final discoveredIp = await discoverHostIp();
         if (discoveredIp != null && discoveredIp.isNotEmpty && discoveredIp != hostIp) {
@@ -684,7 +780,7 @@ class RelayClient {
           final prefs = await SharedPreferences.getInstance();
           await prefs.setString('host_ip', hostIp);
         }
-        if (!_isConnected) {
+        if (!_isConnected && !_isConnecting) {
           connect();
         }
       }
@@ -710,6 +806,7 @@ class RelayClient {
 
       if (!_isConnected) {
         _isConnected = true;
+        _isConnecting = false;
         _connectionEstablishedTime = DateTime.now().millisecondsSinceEpoch;
         _sessionMessageCount = 0;
         logDiagnostic('✅ [SOCKET-CONNECTED] Socket Connected Successfully! Session initialized at $_connectionEstablishedTime');
@@ -723,6 +820,8 @@ class RelayClient {
       _sessionMessageCount++;
       // Any valid message received from host confirms link liveness
       _lastPongTime = DateTime.now().millisecondsSinceEpoch;
+      _wakeGracePeriodUntil = 0;
+      _lastSleepFreezeProbeSentAt = 0;
       _pingNativeKeepAlive();
 
       if (msg.type != 'PONG') {
@@ -731,9 +830,18 @@ class RelayClient {
 
       switch (msg.type) {
         case 'PONG':
+          _wakeGracePeriodUntil = 0;
+          _lastSleepFreezeProbeSentAt = 0;
           if (_lastPingSentTimestamp > 0) {
-            lastPingLatencyMs = _lastPongTime - _lastPingSentTimestamp;
-            logDiagnostic('📥 [PONG-RECEIVED] Heartbeat confirmed! Roundtrip RTT: ${lastPingLatencyMs}ms (AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
+            final calculatedRtt = _lastPongTime - _lastPingSentTimestamp;
+            // If latency exceeds 10s, it spanned an iOS lock/sleep freeze rather than wire transport latency
+            if (calculatedRtt > 10000) {
+              lastPingLatencyMs = -1;
+              logDiagnostic('📥 [PONG-RECEIVED] Heartbeat confirmed after sleep wake! (Pre-sleep ping was ${calculatedRtt ~/ 1000}s ago, AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
+            } else {
+              lastPingLatencyMs = calculatedRtt;
+              logDiagnostic('📥 [PONG-RECEIVED] Heartbeat confirmed! Roundtrip RTT: ${lastPingLatencyMs}ms (AppState: ${isAppPaused ? "BACKGROUND/LOCKED" : "FOREGROUND"})');
+            }
           }
           break;
 
@@ -895,6 +1003,7 @@ class RelayClient {
           if (isAnswered) {
             isAnsweringOrActive = true;
             _setNativeCallActive(true);
+            dismissNativeIncomingCallNotification();
             // Inform Apple CallKit CXProvider that the call has connected (CXCallConnected)
             await CallKitService.instance.setCallConnected();
             logDiagnostic('🎙️ Active cellular call established on Vivo S1 (CallKit & Native keepalive informed)');
@@ -941,6 +1050,7 @@ class RelayClient {
 
           // End native Apple CallKit
           await CallKitService.instance.endAllCalls();
+          dismissNativeIncomingCallNotification();
 
           // Save to local SQLite call log
           final contact = await DatabaseHelper.instance.findContactByNumber(number);
@@ -989,6 +1099,17 @@ class RelayClient {
             });
           } else {
             _activeCallController.add(null);
+          }
+          break;
+
+        case 'AUDIO_ROUTE_STATUS':
+          try {
+            final routeState = HostAudioRouteState.fromMap(Map<String, dynamic>.from(msg.data));
+            currentAudioRoute = routeState;
+            _audioRouteController.add(routeState);
+            logDiagnostic('🔊 Host audio route updated: ${routeState.currentRoute} (BT: ${routeState.bluetoothConnected} - ${routeState.bluetoothName})');
+          } catch (e) {
+            debugPrint('[RELAY] Exception processing AUDIO_ROUTE_STATUS: $e');
           }
           break;
 
@@ -1170,21 +1291,69 @@ class RelayClient {
     }
   }
 
+  int _dtmfSeqCounter = 1;
+
+  /// Transmits DTMF tone with monotonic sequence numbering over local Hotspot Wi-Fi
   Future<bool> sendDtmf(String digit) async {
+    final seq = _dtmfSeqCounter++;
     if (_isConnected && _channel != null) {
       try {
-        _sendRawMessage(RelayMessage.actionDtmf(digit));
+        _sendRawMessage(RelayMessage(type: 'ACTION_DTMF', data: {'digit': digit, 'seq': seq}));
         return true;
       } catch (_) {}
     }
 
     try {
-      final uri = Uri.parse('http://$hostIp:$hostPort/api/dtmf?digit=${Uri.encodeComponent(digit)}');
-      final res = await http.post(uri).timeout(const Duration(seconds: 2));
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/dtmf?digit=${Uri.encodeComponent(digit)}&seq=$seq');
+      final res = await http.post(uri).timeout(const Duration(milliseconds: 1500));
       return res.statusCode == 200;
     } catch (_) {
       return false;
     }
+  }
+
+  /// Commands Android Vivo S1 host to switch cellular call sound source (SPEAKER, EARPIECE, BLUETOOTH)
+  Future<bool> setHostAudioRoute(String route) async {
+    logDiagnostic('🔊 Switching cellular call audio route on host: $route');
+    if (_isConnected && _channel != null) {
+      try {
+        _sendRawMessage(RelayMessage(type: 'ACTION_SET_AUDIO_ROUTE', data: {'route': route}));
+        return true;
+      } catch (_) {}
+    }
+
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/audio/route?route=${Uri.encodeComponent(route)}');
+      final res = await http.post(uri).timeout(const Duration(milliseconds: 1500));
+      if (res.statusCode == 200) {
+        final map = jsonDecode(res.body);
+        if (map is Map<String, dynamic>) {
+          final state = HostAudioRouteState.fromMap(map);
+          currentAudioRoute = state;
+          _audioRouteController.add(state);
+        }
+        return true;
+      }
+    } catch (_) {}
+    return false;
+  }
+
+  /// Fetches current active audio route and connected Bluetooth device from Vivo S1
+  Future<HostAudioRouteState?> fetchHostAudioRoute() async {
+    try {
+      final uri = Uri.parse('http://$hostIp:$hostPort/api/audio/route');
+      final res = await http.get(uri).timeout(const Duration(milliseconds: 1500));
+      if (res.statusCode == 200) {
+        final map = jsonDecode(res.body);
+        if (map is Map<String, dynamic>) {
+          final state = HostAudioRouteState.fromMap(map);
+          currentAudioRoute = state;
+          _audioRouteController.add(state);
+          return state;
+        }
+      }
+    } catch (_) {}
+    return null;
   }
 
   /// Dispatches an outgoing SMS message through Vivo S1's cellular SIM
