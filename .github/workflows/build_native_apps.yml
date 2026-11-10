@@ -98,6 +98,8 @@ jobs:
           flutter pub get
 
       - name: Build Android Release APK
+        env:
+          GRADLE_OPTS: "-Dorg.gradle.jvmargs='-Xmx3584m -XX:MaxMetaspaceSize=1024m -XX:ReservedCodeCacheSize=256m' -Dorg.gradle.daemon=false"
         run: |
           cd pta_host
           flutter build apk --release --android-skip-build-dependency-validation
